@@ -10,8 +10,8 @@ class TrainState:
     pass
 
 def load_train_state(H: Hyperparams) -> TrainState:
-    # Load latest checkpoint from disk if any exists, otherwise initialize
-    # state
+    # Load latest checkpoint from disk if any exists, otherwise initialize
+    # state
     raise NotImplementedError
 
 # @jax.jit

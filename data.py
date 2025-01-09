@@ -8,7 +8,6 @@ import numpy as np
 from hps import Hyperparams
 
 
-
 def load_data(H: Hyperparams):
     match H.dataset:
         case "binarized-mnist":
@@ -32,19 +31,19 @@ def mnist_binarized(H):
     mkdir_p(root_dir)
     if not path.isfile(fname_train_amat):
         urlretrieve(
-            "http://www.cs.toronto.edu/~larocheh/public/datasets/" \
+            "http://www.cs.toronto.edu/~larocheh/public/datasets/"
             "binarized_mnist/binarized_mnist_train.amat",
             fname_train_amat
         )
     if not path.isfile(fname_val_amat):
         urlretrieve(
-            "http://www.cs.toronto.edu/~larocheh/public/datasets/" \
+            "http://www.cs.toronto.edu/~larocheh/public/datasets/"
             "binarized_mnist/binarized_mnist_valid.amat",
             fname_val_amat
         )
     if not path.isfile(fname_test_amat):
         urlretrieve(
-            "http://www.cs.toronto.edu/~larocheh/public/datasets/" \
+            "http://www.cs.toronto.edu/~larocheh/public/datasets/"
             "binarized_mnist/binarized_mnist_test.amat",
             fname_test_amat
         )

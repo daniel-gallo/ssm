@@ -18,13 +18,13 @@ class Hyperparams:
     # Other useful meta-data, set automatically
     seq_length: Optional[int] = None
 
-    def logprint(*args, **kwargs):
+    def logprint(self, *args, **kwargs):
         raise NotImplementedError
 
     @property
     def name(self):
-        # By default, choose a name that depends deterministically on the
-        # model hyperparams. This will allow us to refer to runs using only the
+        # By default, choose a name that depends deterministically on the
+        # model hyperparams. This will allow us to refer to runs using only the
         # hyperparams (without having to know the name).
         hash_int = adler32(repr((
             self.dataset,
