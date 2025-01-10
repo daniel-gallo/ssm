@@ -3,6 +3,7 @@ from typing import Optional
 from zlib import adler32
 
 import tyro
+import optax
 
 from log_util import logprint
 
@@ -12,13 +13,26 @@ class Hyperparams:
     # Command line options
     data_dir: str = 'data'
     log_dir: str = 'logs'
+    checkpoint_dir: str = 'checkpoints'
     dataset: str = 'binarized-mnist'
     seed: int = 0
     batch_size: int = 32
+    learning_rate: float = 1e-3
     enable_wandb: bool = False
+    checkpoint_every: int = 30  # Measured in minutes
+    num_epochs: int = 1
 
     # Other useful meta-data, set automatically
-    seq_length: Optional[int] = None
+    data_seq_length: Optional[int] = None
+    data_num_channels: Optional[int] = None
+
+    @property
+    def data_shape(self):
+        return self.data_seq_length, self.data_num_channels
+
+    @property
+    def optimizer(self):
+        return optax.adam(self.learning_rate)
 
     def logprint(self, *args, **kwargs):
         logprint(self.log_dir, self.id, self.enable_wandb, *args, **kwargs)
@@ -32,8 +46,13 @@ class Hyperparams:
             self.dataset,
             self.seed,
             self.batch_size,
+            self.learning_rate,
         )).encode("utf-8"))
         return f'{hash_int:08x}'
+
+    @property
+    def checkpoint_prefix(self):
+        return self.id + "_"
 
 
 def load_options():

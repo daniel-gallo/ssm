@@ -60,10 +60,15 @@ def mnist_binarized(H):
         test = np.loadtxt(fname_test_amat)
         np.save(fname_test_np, test)
 
-    assert train.shape == (60_000, 784)
-    assert test.shape  == (10_000, 784)
+    # Add a dummy channel dim
+    train, test = np.expand_dims(train, -1), np.expand_dims(test, -1)
+
+    assert train.shape == (60_000, 784, 1)
+    assert test.shape  == (10_000, 784, 1)
+
     H = dataclasses.replace(
         H,
-        seq_length=784,
+        data_seq_length=784,
+        data_num_channels=1,
     )
     return H, (train, test)
