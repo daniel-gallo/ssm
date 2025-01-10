@@ -26,10 +26,15 @@ def train(H: Hyperparams, state: TrainState, data):
 
 def main():
     H = load_options()
+    H.logprint("Loading data")
     H, data = load_data(H)
+    H.logprint("Training")
     # TODO:
     # H, train_state = load_train_state(H)
     # train(H, train_state, data)
+    if H.enable_wandb:
+        import wandb
+        wandb.finish()
 
 if __name__ == "__main__":
     main()

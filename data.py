@@ -16,9 +16,6 @@ def load_data(H: Hyperparams):
             raise ValueError(f'Invalid dataset "{H.dataset}".')
     return H, data
 
-def mkdir_p(path):
-    os.makedirs(path, exist_ok=True)
-
 def mnist_binarized(H):
     root_dir = path.join(H.data_dir, "mnist-binarized")
     fname_train_amat = path.join(root_dir, "train.amat")
@@ -28,7 +25,7 @@ def mnist_binarized(H):
     fname_train_np = path.join(root_dir, "train.npy")
     fname_test_np  = path.join(root_dir, "test.npy" )
 
-    mkdir_p(root_dir)
+    os.makedirs(root_dir, exist_ok=True)
     if not path.isfile(fname_train_amat):
         urlretrieve(
             "http://www.cs.toronto.edu/~larocheh/public/datasets/"
