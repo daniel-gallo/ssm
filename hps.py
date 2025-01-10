@@ -15,7 +15,6 @@ class Hyperparams:
     dataset: str = 'binarized-mnist'
     seed: int = 0
     batch_size: int = 32
-    run_name: Optional[str] = None
     enable_wandb: bool = False
 
     # Other useful meta-data, set automatically
