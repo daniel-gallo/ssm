@@ -70,7 +70,6 @@ def train_epoch(H: Hyperparams, state: TrainState, data):
     for batch in reshape_batches(H.batch_size, data):
         state, metrics = train_iter(H, state, batch)
         # TODO:
-        #  - Cast JAX array metrics to NumPy/Python floats
         #  - Do not log on every iteration
         H.logprint("Train step", step=state.step, **metrics)
     return state
