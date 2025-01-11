@@ -2,29 +2,30 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
+import jax
+import jax.numpy as jnp
+import numpy as np
+import optax
 from flax.training import checkpoints
 from jax import random
-import jax.numpy as jnp
-import jax
-import optax
-import numpy as np
 
-from hps import load_options, Hyperparams
 from data import load_data
+from hps import Hyperparams, load_options
 from model import VSSM
 
 
 def reshape_batches(batch_size, data):
     num_batches = len(data) // batch_size
     return np.reshape(
-        data[:batch_size * num_batches],
-        (num_batches, batch_size) + data.shape[1:]
+        data[: batch_size * num_batches], (num_batches, batch_size) + data.shape[1:]
     )
+
 
 def get_epoch(step, batch_size, data_size):
     num_batches = data_size // batch_size
     assert step % num_batches == 0
     return step // num_batches
+
 
 @jax.tree_util.register_dataclass
 @dataclass
@@ -33,6 +34,7 @@ class TrainState:
     optimizer_state: Any
     step: int
     prng_state: Any
+
 
 def load_train_state(H: Hyperparams):
     latest_checkpoint_path = checkpoints.latest_checkpoint(
@@ -55,31 +57,36 @@ def load_train_state(H: Hyperparams):
         S = TrainState(weights, optimizer_state, 0, train_rng)
     return H, S
 
+
 @partial(jax.jit, static_argnums=0)
 def train_iter(H: Hyperparams, S: TrainState, batch):
     run_rng, iter_rng = random.split(S.prng_state)
+
     def lossfun(weights):
         return VSSM(H).apply(weights, batch, iter_rng)
+
     gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
-    updates, optimizer_state = H.optimizer.update(
-        gradval, S.optimizer_state
-    )
+    updates, optimizer_state = H.optimizer.update(gradval, S.optimizer_state)
     weights = optax.apply_updates(S.weights, updates)
     return (
         TrainState(weights, optimizer_state, S.step + 1, run_rng),
         metrics,
     )
 
+
 def train_epoch(H: Hyperparams, S: TrainState, data):
-    early_logsteps = set(2 ** e for e in range(12))
+    early_logsteps = set(2**e for e in range(12))
+
     def should_log(step):
         return step.item() in early_logsteps or not step % H.steps_per_print
 
     # TODO shuffle data
     for batch in reshape_batches(H.batch_size, data):
         S, metrics = train_iter(H, S, batch)
-        if should_log(S.step): H.logprint("Train step", step=S.step, **metrics)
+        if should_log(S.step):
+            H.logprint("Train step", step=S.step, **metrics)
     return S
+
 
 def train(H: Hyperparams, S: TrainState, data):
     data_train, data_test = data
@@ -93,6 +100,7 @@ def train(H: Hyperparams, S: TrainState, data):
         #  - optionally generate and save samples
         #  - optionally save a checkpoint
 
+
 def main():
     H = load_options()
     H.logprint("Loading data")
@@ -102,7 +110,9 @@ def main():
     train(H, S, data)
     if H.enable_wandb:
         import wandb
+
         wandb.finish()
+
 
 if __name__ == "__main__":
     main()
