@@ -34,7 +34,7 @@ class TrainState:
     step: int
     prng_state: Any
 
-def load_train_state(H: Hyperparams) -> TrainState:
+def load_train_state(H: Hyperparams):
     latest_checkpoint_path = checkpoints.latest_checkpoint(
         H.checkpoint_dir, H.checkpoint_prefix
     )
