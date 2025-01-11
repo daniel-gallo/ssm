@@ -20,6 +20,7 @@ class Hyperparams:
     learning_rate: float = 1e-3
     enable_wandb: bool = False
     checkpoint_every: int = 30  # Measured in minutes
+    steps_per_print: int = 1000
     num_epochs: int = 1
 
     # Other useful meta-data, set automatically
