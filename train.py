@@ -39,7 +39,7 @@ def load_train_state(H: Hyperparams) -> TrainState:
             H.checkpoint_dir, target=None, prefix=H.checkpoint_prefix
         )
     else:
-        H.logprint(f"No checkpoint found, initializing")
+        H.logprint("No checkpoint found, initializing")
         init_rng, train_rng = random.split(random.PRNGKey(H.seed))
         weights = VSSM(H).init(
             init_rng,
@@ -66,11 +66,11 @@ def train_iter(H: Hyperparams, state: TrainState, batch):
     )
 
 def train_epoch(H: Hyperparams, state: TrainState, data):
-    # TODO shuffle data
+    # TODO shuffle data
     for batch in reshape_batches(H.batch_size, data):
         state, metrics = train_iter(H, state, batch)
         # TODO:
-        #  - Do not log on every iteration
+        #  - Do not log on every iteration
         H.logprint("Train step", step=state.step, **metrics)
     return state
 
@@ -79,9 +79,9 @@ def train(H: Hyperparams, state: TrainState, data):
     for e in range(H.num_epochs):
         state = train_epoch(H, state, data_train)
         # TODO:
-        #  - evaluate on data_test
-        #  - optionally generate and save samples
-        #  - optionally save a checkpoint
+        #  - evaluate on data_test
+        #  - optionally generate and save samples
+        #  - optionally save a checkpoint
 
 def main():
     H = load_options()
