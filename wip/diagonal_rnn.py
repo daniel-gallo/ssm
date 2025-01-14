@@ -18,11 +18,13 @@ class RNNNode(nn.Module):
             # TODO: make singular values around 1
             return random.normal(rng, shape)
 
-        a = self.param("a", init_fn, (self.d_hidden, self.d_hidden))
+        a = self.param("a", init_fn, (self.d_hidden, ))
         b = self.param("b", init_fn, (self.d_in, self.d_hidden))
         c = self.param("c", init_fn, (self.d_hidden, self.d_out))
 
-        x = x @ a + u @ b
+        # softmax(a) - temporary solution to keep recurrent from exploding
+        # taken from RG_LRU/Griffin
+        x = x * nn.softmax(a)[None, :] + u @ b
         output = x @ c
 
         return x, output
@@ -56,7 +58,7 @@ def get_layer_output_scan(rnn_node: RNNNode, params, u: jax.Array) -> jax.Array:
 def get_layer_output_parallel(rnn_node: RNNNode, params, u: jax.Array):
     seq_len, bs, d_in = u.shape
 
-    a = params["params"]["a"]
+    a = nn.softmax(params["params"]["a"])
     b = params["params"]["b"]
     c = params["params"]["c"]
 
@@ -64,10 +66,11 @@ def get_layer_output_parallel(rnn_node: RNNNode, params, u: jax.Array):
         # (u_1, ..., u_t) -> (A, Bu_1), ..., (A, Bu_t)
         return (jnp.repeat(a[None, ...], repeats=seq_len, axis=0), u @ b)
 
+    @jax.vmap
     def binary_operation(e1, e2):
         M1, v1 = e1
         M2, v2 = e2
-        return M1 @ M2, v1 @ M2 + v2
+        return M1 * M2, v1 * M2[None, :] + v2
 
     _, hidden_states = jax.lax.associative_scan(binary_operation, lift(u))
     y = hidden_states @ c
@@ -100,11 +103,16 @@ inp = random.normal(key, (seq_len, bs, d_in))
 
 # %%
 tic = time.time()
-# y_naive = get_layer_output_naive(model, state, inp)  # 8 seconds
-# y_scan = get_layer_output_scan(model, state, inp)  # 0.055 seconds
+y_naive = get_layer_output_naive(model, state, inp)  # 8 seconds
+y_scan = get_layer_output_scan(model, state, inp)  # 0.055 seconds
 y_parallel = get_layer_output_parallel(model, state, inp)  # 4.47 seconds
 tac = time.time()
 print(tac - tic)
+
+# %%
+print(jnp.max(jnp.abs(y_scan - y_parallel)))
+print(jnp.allclose(y_scan, y_parallel, atol=1e-5))
+print(y_scan.shape)
 
 # %%
 tic = time.time()
