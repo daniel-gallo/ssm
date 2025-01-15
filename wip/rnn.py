@@ -1,10 +1,7 @@
-# %%
-import time
-
 import flax.linen as nn
-import jax
 import jax.numpy as jnp
 from jax import random
+from jax.nn.initializers import glorot_normal
 
 
 class RNNNode(nn.Module):
@@ -13,114 +10,92 @@ class RNNNode(nn.Module):
     d_out: int
 
     @nn.compact
-    def __call__(self, x, u):
-        def init_fn(rng, shape):
-            # TODO: make singular values around 1
-            return random.normal(rng, shape)
+    def __call__(self, h, x):
+        def stable_init(rng, shape):
+            return random.uniform(rng, shape, minval=0.999, maxval=1.001)
 
-        a = self.param("a", init_fn, (self.d_hidden, self.d_hidden))
-        b = self.param("b", init_fn, (self.d_in, self.d_hidden))
-        c = self.param("c", init_fn, (self.d_hidden, self.d_out))
+        a = self.param("a", stable_init, (self.d_hidden,))
+        b = self.param("b", glorot_normal(), (self.d_in, self.d_hidden))
+        c = self.param("c", glorot_normal(), (self.d_hidden, self.d_out))
 
-        x = x @ a + u @ b
-        output = x @ c
+        h = h * a + x @ b
+        y = h @ c
 
-        return x, output
-
-
-def get_layer_output_naive(rnn_node: RNNNode, params, u: jax.Array):
-    seq_len, bs, d_in = u.shape
-
-    x = jnp.zeros((bs, rnn_node.d_hidden))
-    ys = []
-    for i in range(seq_len):
-        x, y = rnn_node.apply(params, x, u[i])
-        ys.append(y)
-
-    return jnp.stack(ys)
+        return h, y
 
 
-def get_layer_output_scan(rnn_node: RNNNode, params, u: jax.Array) -> jax.Array:
-    seq_len, bs, d_in = u.shape
+class RNNLayer(nn.Module):
+    d_in: int
+    d_hidden: int
+    d_out: int
 
-    def scan_fn(x, u):
-        x, y = rnn_node.apply(params, x, u)
-        return x, y
+    @nn.compact
+    def __call__(self, x):
+        seq_len, bs, d_in = x.shape
+        layer = nn.scan(
+            RNNNode,
+            variable_broadcast="params",
+            split_rngs={"params": False},
+        )(self.d_in, self.d_hidden, self.d_out)
 
-    x = jnp.zeros((bs, rnn_node.d_hidden))
-    _, y = jax.lax.scan(scan_fn, x, u)
+        h = jnp.zeros((bs, d_hidden))
+        _, y = layer(h, x)
+        return y
 
-    return y
 
+class RNN(nn.Module):
+    n_layers: int
+    d_hidden: int
+    d_out: int
 
-def get_layer_output_parallel(rnn_node: RNNNode, params, u: jax.Array):
-    seq_len, bs, d_in = u.shape
+    def setup(self):
+        self.initial = nn.Dense(2 * d_hidden)
+        self.layers = [
+            RNNLayer(d_in=d_hidden, d_hidden=d_hidden, d_out=2 * d_hidden)
+            for _ in range(self.n_layers)
+        ]
+        self.final = nn.Dense(d_out)
 
-    a = params["params"]["a"]
-    b = params["params"]["b"]
-    c = params["params"]["c"]
+    def gaussian_sampling(self, x):
+        mu, sigma = jnp.split(x, 2, axis=-1)
+        y_shape = mu.shape
 
-    def lift(u):
-        # (u_1, ..., u_t) -> (A, Bu_1), ..., (A, Bu_t)
-        return (jnp.repeat(a[None, ...], repeats=seq_len, axis=0), u @ b)
+        z = random.normal(self.make_rng("rnn_gaussian_sampling"), y_shape)
+        return mu + z * sigma
 
-    def binary_operation(e1, e2):
-        M1, v1 = e1
-        M2, v2 = e2
-        return M1 @ M2, v1 @ M2 + v2
+    def __call__(self, x):
+        x = self.initial(x)
+        x = nn.relu(x)
+        x = self.gaussian_sampling(x)
 
-    _, hidden_states = jax.lax.associative_scan(binary_operation, lift(u))
-    y = hidden_states @ c
+        for layer in self.layers:
+            x = layer(x)
+            x = nn.relu(x)
+            x = self.gaussian_sampling(x)
 
-    return y
+        x = self.final(x)
+        return x
 
 
 def get_model_and_state(seed):
-    model = RNNNode(d_in=d_in, d_hidden=d_hidden, d_out=d_out)
+    model = RNN(n_layers=n_layers, d_hidden=d_hidden, d_out=d_out)
 
     key = random.key(0)
-    hidden_state = jnp.zeros((bs, d_hidden))
-    inp = jnp.zeros((bs, d_in))
-    state = model.init(key, hidden_state, inp)
+    inp = jnp.zeros((seq_len, bs, d_in))
+    state = model.init(key, inp)
 
     return model, state
 
 
-# %%
+n_layers = 3
 bs = 32
 seq_len = 784
-d_in = 128
+d_in = 1
 d_hidden = 512
-d_out = 128
+d_out = 1
 
 model, state = get_model_and_state(seed=42)
-
-key = random.key(42)
-inp = random.normal(key, (seq_len, bs, d_in))
-
-# %%
-tic = time.time()
-# y_naive = get_layer_output_naive(model, state, inp)  # 8 seconds
-# y_scan = get_layer_output_scan(model, state, inp)  # 0.055 seconds
-y_parallel = get_layer_output_parallel(model, state, inp)  # 4.47 seconds
-tac = time.time()
-print(tac - tic)
-
-# %%
-tic = time.time()
-for _ in range(10):
-    y_naive = get_layer_output_naive(model, state, inp)  # 1.356 seconds
-tac = time.time()
-print("Naive: ", (tac - tic) / 10)
-
-tic = time.time()
-for _ in range(10):
-    y_scan = get_layer_output_scan(model, state, inp)  # 0.016 seconds
-tac = time.time()
-print("Scan: ", (tac - tic) / 10)
-
-tic = time.time()
-for _ in range(10):
-    y_parallel = get_layer_output_parallel(model, state, inp)  # 0.042 seconds
-tac = time.time()
-print("Parallel scan: ", (tac - tic) / 10)
+key = random.key(0)
+inp = random.normal(random.key(0), (seq_len, bs, d_in))
+print(inp.shape)
+print(model.apply(state, inp, rngs={"params": random.key(0)}).shape)
