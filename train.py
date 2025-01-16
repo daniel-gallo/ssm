@@ -115,7 +115,7 @@ def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
 
 def eval(H: Hyperparams, S: TrainState, data):
     # TODO: don't skip last batch
-    # We don't care too much about reproducibility here:
+    # We don't care too much about reproducibility here:
     rng = random.PRNGKey(int(time.time()))
     metrics = []
     for batch in reshape_batches(H.batch_size_eval, data):
@@ -140,7 +140,7 @@ def train(H: Hyperparams, S: TrainState, data):
             t_last_checkpoint = time.time()
         if not e % H.epochs_per_eval:
             H.logprint("Eval", step=S.step, **eval(H, S, data_test))
-        # TODO:
+        # TODO:
         #  - optionally generate and save samples
 
 
