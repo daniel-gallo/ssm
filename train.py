@@ -37,6 +37,10 @@ def accum_metrics(metrics):
     )
 
 
+def prepend_to_keys(d, s):
+    return {s + k: v for k, v in d.items()}
+
+
 @jax.tree_util.register_dataclass
 @dataclass
 class TrainState:
@@ -97,6 +101,7 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
     # TODO shuffle data
     for batch in reshape_batches(H.batch_size, data):
         S, metrics = train_iter(H, S, batch)
+        metrics = prepend_to_keys(metrics, "train/")
         if should_log(S.step):
             H.logprint("Train step", step=S.step, **metrics)
     return S
@@ -116,7 +121,7 @@ def eval(H: Hyperparams, S: TrainState, data):
     for batch in reshape_batches(H.batch_size_eval, data):
         rng, rng_iter = random.split(rng)
         metrics.append(eval_iter(H, S, rng_iter, batch))
-    return accum_metrics(metrics)
+    return prepend_to_keys(accum_metrics(metrics), "eval/")
 
 
 def train(H: Hyperparams, S: TrainState, data):
