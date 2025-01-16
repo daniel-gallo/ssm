@@ -109,6 +109,7 @@ def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
 
 
 def eval(H: Hyperparams, S: TrainState, data):
+    # TODO: don't skip last batch
     # We don't care too much about reproducibility here:
     rng = random.PRNGKey(int(time.time()))
     metrics = []
