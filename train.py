@@ -71,7 +71,9 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
         return VSSM(H).apply(weights, batch, iter_rng)
 
     gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
-    updates, optimizer_state = H.optimizer.update(gradval, S.optimizer_state)
+    updates, optimizer_state = H.optimizer.update(
+        gradval, S.optimizer_state, S.weights
+    )
     weights = optax.apply_updates(S.weights, updates)
     return (
         TrainState(weights, optimizer_state, S.step + 1, run_rng),

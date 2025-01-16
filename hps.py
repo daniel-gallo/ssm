@@ -33,7 +33,7 @@ class Hyperparams:
 
     @property
     def optimizer(self):
-        return optax.adam(self.learning_rate)
+        return optax.adamw(self.learning_rate)
 
     def logprint(self, *args, **kwargs):
         logprint(self.log_dir, self.id, self.enable_wandb, *args, **kwargs)
