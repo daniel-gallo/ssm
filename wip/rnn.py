@@ -24,7 +24,6 @@ class RNNNode(nn.Module):
         a = self.param("a", stable_init, (self.d_hidden,))
         b = self.param("b", glorot_normal(), (self.d_in, self.d_hidden))
         c = self.param("c", glorot_normal(), (self.d_hidden, self.d_out))
-
         h = h * a + x @ b
         y = h @ c
 
@@ -50,18 +49,23 @@ class RNNLayer(nn.Module):
         return y
 
 
-class RNN(nn.Module):
+class RNNBlock(nn.Module):
     n_layers: int
     d_hidden: int
     d_out: int
+    bidirectional: bool = False
+    use_residual: bool = True
+    use_downsampling: bool = False
 
     def setup(self):
-        self.initial = nn.Dense(2 * d_hidden)
+        self.initial = nn.Dense(d_hidden)
         self.layers = [
-            RNNLayer(d_in=d_hidden, d_hidden=d_hidden, d_out=2 * d_hidden)
+            RNNLayer(d_in=d_hidden, d_hidden=d_hidden, d_out=d_hidden)
             for _ in range(self.n_layers)
         ]
         self.final = nn.Dense(d_out)
+        if self.use_downsampling:
+            self.downsampling = nn.Dense(d_out)
 
     def gaussian_sampling(self, x):
         mu, logsigma = jnp.split(x, 2, axis=-1)
@@ -71,20 +75,40 @@ class RNN(nn.Module):
         return mu + z * jnp.exp(logsigma)
 
     def __call__(self, x):
+        # TODO: implement bidirectional RNN
+        #
+        identity = self.downsampling(x) if self.use_downsampling else x
         x = self.initial(x)
         x = nn.relu(x)
-        x = self.gaussian_sampling(x)
+        # x = self.gaussian_sampling(x)
 
         for layer in self.layers:
             x = layer(x)
             x = nn.relu(x)
-            x = self.gaussian_sampling(x)
+            # x = self.gaussian_sampling(x)
 
         x = self.final(x)
+        x = x + identity if self.use_residual else x
         return x
 
+
+class DecoderBlock(nn.Module):
+    d_in: int
+    d_hidden: int
+    d_out: int
+
+    def setup(self):
+        # TODO: implement Decoder block initialisation
+        pass
+
+    def __call__(self, x):
+        # TODO: move latent variable sampling from previous RNN block to here
+        # TODO: add prior
+        pass
+
+
 def get_model_and_state(seed):
-    model = RNN(n_layers=n_layers, d_hidden=d_hidden, d_out=d_out)
+    model = RNNBlock(n_layers=n_layers, d_hidden=d_hidden, d_out=d_out)
 
     key = random.key(0)
     inp = jnp.zeros((seq_len, bs, d_in))
