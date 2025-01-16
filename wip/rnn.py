@@ -34,6 +34,7 @@ class RNNLayer(nn.Module):
     d_in: int
     d_hidden: int
     d_out: int
+    bidirectional: bool = False
 
     @nn.compact
     def __call__(self, x):
@@ -46,6 +47,15 @@ class RNNLayer(nn.Module):
 
         h = jnp.zeros((bs, d_hidden))
         _, y = layer(h, x)
+
+        if self.bidirectional:
+            bw_layer = nn.scan(
+                RNNNode,
+                variable_broadcast="params",
+                split_rngs={"params": False},
+                reverse=True,
+            )(self.d_in, self.d_hidden, self.d_out)
+            y = y + bw_layer(h, x)[1]
         return y
 
 
@@ -54,7 +64,7 @@ class RNNBlock(nn.Module):
     d_hidden: int
     d_out: int
     bidirectional: bool = False
-    use_residual: bool = True
+    use_residual: bool = False
     use_downsampling: bool = False
 
     def setup(self):
@@ -67,16 +77,7 @@ class RNNBlock(nn.Module):
         if self.use_downsampling:
             self.downsampling = nn.Dense(d_out)
 
-    def gaussian_sampling(self, x):
-        mu, logsigma = jnp.split(x, 2, axis=-1)
-        y_shape = mu.shape
-
-        z = random.normal(self.make_rng("rnn_gaussian_sampling"), y_shape)
-        return mu + z * jnp.exp(logsigma)
-
     def __call__(self, x):
-        # TODO: implement bidirectional RNN
-        #
         identity = self.downsampling(x) if self.use_downsampling else x
         x = self.initial(x)
         x = nn.relu(x)
@@ -98,17 +99,24 @@ class DecoderBlock(nn.Module):
     d_out: int
 
     def setup(self):
-        # TODO: implement Decoder block initialisation
-        pass
+        self.q_block = RNNBlock(n_layers=2, d_hidden=d_hidden, d_out=d_out * 2, bidirectional=True)
+        self.p_block = RNNBlock(n_layers=2, d_hidden=d_hidden, d_out=d_out * 2, bidirectional=False)
 
     def __call__(self, x):
         # TODO: move latent variable sampling from previous RNN block to here
         # TODO: add prior
-        pass
+        ...
+
+    def gaussian_sampling(self, x):
+        mu, logsigma = jnp.split(x, 2, axis=-1)
+        y_shape = mu.shape
+
+        z = random.normal(self.make_rng("rnn_gaussian_sampling"), y_shape)
+        return mu + z * jnp.exp(logsigma)
 
 
 def get_model_and_state(seed):
-    model = RNNBlock(n_layers=n_layers, d_hidden=d_hidden, d_out=d_out)
+    model = RNNBlock(n_layers=n_layers, d_hidden=d_hidden, d_out=d_out, bidirectional=False)
 
     key = random.key(0)
     inp = jnp.zeros((seq_len, bs, d_in))
