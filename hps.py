@@ -17,10 +17,14 @@ class Hyperparams:
     dataset: str = "binarized-mnist"
     seed: int = 0
     batch_size: int = 32
+    batch_size_eval: int = 128
     learning_rate: float = 1e-3
     enable_wandb: bool = False
+
     steps_per_print: int = 1000
+    epochs_per_eval: int = 1
     mins_per_checkpoint: float = 30
+
     num_epochs: int = 1
 
     # Other useful meta-data, set automatically

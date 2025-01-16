@@ -10,6 +10,7 @@ import numpy as np
 import optax
 from flax.training import checkpoints
 from jax import random
+from jax import tree_util
 
 from data import load_data
 from hps import Hyperparams, load_options
@@ -30,24 +31,30 @@ def get_epoch(step, batch_size, data_size):
     return step // num_batches
 
 
+def accum_metrics(metrics):
+    return tree_util.tree_map(
+        lambda *args: jnp.mean(jnp.array(args)), *metrics
+    )
+
+
 @jax.tree_util.register_dataclass
 @dataclass
 class TrainState:
     weights: Any
     optimizer_state: Any
     step: int
-    prng_state: Any
+    rng: Any
 
 
 def load_train_state(H: Hyperparams):
-    init_rng, train_rng = random.split(random.PRNGKey(H.seed))
+    rng_init, rng_train = random.split(random.PRNGKey(H.seed))
     weights = VSSM(H).init(
-        init_rng,
+        rng_init,
         jnp.zeros((H.batch_size,) + H.data_shape),
         random.PRNGKey(0),
     )
     optimizer_state = H.optimizer.init(weights)
-    S = TrainState(weights, optimizer_state, 0, train_rng)
+    S = TrainState(weights, optimizer_state, 0, rng_train)
 
     latest_checkpoint_path = checkpoints.latest_checkpoint(
         H.checkpoint_dir, H.checkpoint_prefix
@@ -65,10 +72,10 @@ def load_train_state(H: Hyperparams):
 
 @partial(jax.jit, static_argnums=0)
 def train_iter(H: Hyperparams, S: TrainState, batch):
-    run_rng, iter_rng = random.split(S.prng_state)
+    rng, rng_iter = random.split(S.rng)
 
     def lossfun(weights):
-        return VSSM(H).apply(weights, batch, iter_rng)
+        return VSSM(H).apply(weights, batch, rng_iter)
 
     gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
     updates, optimizer_state = H.optimizer.update(
@@ -76,7 +83,7 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
     )
     weights = optax.apply_updates(S.weights, updates)
     return (
-        TrainState(weights, optimizer_state, S.step + 1, run_rng),
+        TrainState(weights, optimizer_state, S.step + 1, rng),
         metrics,
     )
 
@@ -95,6 +102,22 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
     return S
 
 
+@partial(jax.jit, static_argnums=0)
+def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
+    _, metrics = VSSM(H).apply(S.weights, batch, rng_iter)
+    return metrics
+
+
+def eval(H: Hyperparams, S: TrainState, data):
+    # We don't care too much about reproducibility here:
+    rng = random.PRNGKey(int(time.time()))
+    metrics = []
+    for batch in reshape_batches(H.batch_size_eval, data):
+        rng, rng_iter = random.split(rng)
+        metrics.append(eval_iter(H, S, rng_iter, batch))
+    return accum_metrics(metrics)
+
+
 def train(H: Hyperparams, S: TrainState, data):
     data_train, data_test = data
 
@@ -109,7 +132,9 @@ def train(H: Hyperparams, S: TrainState, data):
                 path.abspath(H.checkpoint_dir), S, S.step, H.checkpoint_prefix
             )
             t_last_checkpoint = time.time()
-        #  - evaluate on data_test
+        if not e % H.epochs_per_eval:
+            H.logprint("Eval", step=S.step, **eval(H, S, data_test))
+        # TODO:
         #  - optionally generate and save samples
 
 
