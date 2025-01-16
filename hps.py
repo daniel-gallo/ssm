@@ -19,8 +19,8 @@ class Hyperparams:
     batch_size: int = 32
     learning_rate: float = 1e-3
     enable_wandb: bool = False
-    checkpoint_every: int = 30  # Measured in minutes
     steps_per_print: int = 1000
+    mins_per_checkpoint: float = 30
     num_epochs: int = 1
 
     # Other useful meta-data, set automatically

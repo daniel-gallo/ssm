@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
+import time
+from os import path
 
 import jax
 import jax.numpy as jnp
@@ -17,7 +19,8 @@ from model import VSSM
 def reshape_batches(batch_size, data):
     num_batches = len(data) // batch_size
     return np.reshape(
-        data[: batch_size * num_batches], (num_batches, batch_size) + data.shape[1:]
+        data[: batch_size * num_batches],
+        (num_batches, batch_size) + data.shape[1:]
     )
 
 
@@ -37,24 +40,26 @@ class TrainState:
 
 
 def load_train_state(H: Hyperparams):
+    init_rng, train_rng = random.split(random.PRNGKey(H.seed))
+    weights = VSSM(H).init(
+        init_rng,
+        jnp.zeros((H.batch_size,) + H.data_shape),
+        random.PRNGKey(0),
+    )
+    optimizer_state = H.optimizer.init(weights)
+    S = TrainState(weights, optimizer_state, 0, train_rng)
+
     latest_checkpoint_path = checkpoints.latest_checkpoint(
         H.checkpoint_dir, H.checkpoint_prefix
     )
     if latest_checkpoint_path is not None:
-        H.logprint(f"Restoring checkpoint from {latest_checkpoint_path}")
         S = checkpoints.restore_checkpoint(
-            H.checkpoint_dir, target=None, prefix=H.checkpoint_prefix
+            path.abspath(H.checkpoint_dir), target=S,
+            prefix=H.checkpoint_prefix
         )
+        H.logprint(f"Checkpoint restored from {latest_checkpoint_path}")
     else:
-        H.logprint("No checkpoint found, initializing")
-        init_rng, train_rng = random.split(random.PRNGKey(H.seed))
-        weights = VSSM(H).init(
-            init_rng,
-            jnp.zeros((H.batch_size,) + H.data_shape),
-            random.PRNGKey(0),
-        )
-        optimizer_state = H.optimizer.init(weights)
-        S = TrainState(weights, optimizer_state, 0, train_rng)
+        H.logprint("No checkpoint found")
     return H, S
 
 
@@ -91,14 +96,19 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
 def train(H: Hyperparams, S: TrainState, data):
     data_train, data_test = data
 
+    t_last_checkpoint = time.time()
     # In case we're resuming a run
     start_epoch = get_epoch(S.step, H.batch_size, len(data_train))
     for e in range(start_epoch, H.num_epochs):
         S = train_epoch(H, S, data_train)
-        # TODO:
+        if (time.time() - t_last_checkpoint) / 60 > H.mins_per_checkpoint:
+            H.logprint("Saving checkpoint", step=S.step)
+            checkpoints.save_checkpoint(
+                path.abspath(H.checkpoint_dir), S, S.step, H.checkpoint_prefix
+            )
+            t_last_checkpoint = time.time()
         #  - evaluate on data_test
         #  - optionally generate and save samples
-        #  - optionally save a checkpoint
 
 
 def main():
