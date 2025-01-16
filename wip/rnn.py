@@ -4,6 +4,13 @@ from jax import random
 from jax.nn.initializers import glorot_normal
 
 
+def kl_gauss(mu1, mu2, logsigma1, logsigma2):
+    """
+    Computes KL divergence between two Gaussians with diagonal covariance matrices.
+    """
+    return logsigma2 - logsigma1 + (jnp.exp(logsigma1)**2 + (mu1 - mu2)**2) / (2 * jnp.exp(logsigma2)**2) - 0.5
+
+
 class RNNNode(nn.Module):
     d_in: int
     d_hidden: int
@@ -57,11 +64,11 @@ class RNN(nn.Module):
         self.final = nn.Dense(d_out)
 
     def gaussian_sampling(self, x):
-        mu, sigma = jnp.split(x, 2, axis=-1)
+        mu, logsigma = jnp.split(x, 2, axis=-1)
         y_shape = mu.shape
 
         z = random.normal(self.make_rng("rnn_gaussian_sampling"), y_shape)
-        return mu + z * sigma
+        return mu + z * jnp.exp(logsigma)
 
     def __call__(self, x):
         x = self.initial(x)
@@ -75,7 +82,6 @@ class RNN(nn.Module):
 
         x = self.final(x)
         return x
-
 
 def get_model_and_state(seed):
     model = RNN(n_layers=n_layers, d_hidden=d_hidden, d_out=d_out)
