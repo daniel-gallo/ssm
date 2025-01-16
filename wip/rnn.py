@@ -6,7 +6,7 @@ from jax.nn.initializers import glorot_normal
 
 def kl_gauss(mu1, mu2, logsigma1, logsigma2):
     """
-    Computes KL divergence between two Gaussians with diagonal covariance matrices.
+    Computes KL divergence between a two sequences of one-dimentional Gaussians.
     """
     return logsigma2 - logsigma1 + (jnp.exp(logsigma1)**2 + (mu1 - mu2)**2) / (2 * jnp.exp(logsigma2)**2) - 0.5
 
@@ -65,31 +65,28 @@ class RNNBlock(nn.Module):
     d_out: int
     bidirectional: bool = False
     use_residual: bool = False
-    use_downsampling: bool = False
 
     def setup(self):
-        self.initial = nn.Dense(d_hidden)
+        self.initial = nn.Dense(self.d_hidden)
         self.layers = [
-            RNNLayer(d_in=d_hidden, d_hidden=d_hidden, d_out=d_hidden)
+            RNNLayer(d_in=self.d_hidden, d_hidden=self.d_hidden, d_out=self.d_hidden)
             for _ in range(self.n_layers)
         ]
-        self.final = nn.Dense(d_out)
-        if self.use_downsampling:
-            self.downsampling = nn.Dense(d_out)
+        self.final = nn.Dense(self.d_out)
+        if self.use_residual:
+            self.res_proj = nn.Dense(self.d_out)
 
     def __call__(self, x):
-        identity = self.downsampling(x) if self.use_downsampling else x
+        identity = x
         x = self.initial(x)
         x = nn.relu(x)
-        # x = self.gaussian_sampling(x)
 
         for layer in self.layers:
             x = layer(x)
             x = nn.relu(x)
-            # x = self.gaussian_sampling(x)
 
         x = self.final(x)
-        x = x + identity if self.use_residual else x
+        x = x + self.res_proj(identity) if self.use_residual else x
         return x
 
 
@@ -99,24 +96,30 @@ class DecoderBlock(nn.Module):
     d_out: int
 
     def setup(self):
-        self.q_block = RNNBlock(n_layers=2, d_hidden=d_hidden, d_out=d_out * 2, bidirectional=True)
-        self.p_block = RNNBlock(n_layers=2, d_hidden=d_hidden, d_out=d_out * 2, bidirectional=False)
+        self.q_block = RNNBlock(n_layers=2, d_hidden=self.d_hidden, d_out=self.d_out * 2, bidirectional=True)
+        self.p_block = RNNBlock(n_layers=2, d_hidden=self.d_hidden, d_out=self.d_out * 2, bidirectional=False)
+        self.res_block = RNNBlock(n_layers=2, d_hidden=self.d_hidden, d_out=self.d_out, use_residual=True)
+        self.z_proj = nn.Dense(self.d_out)
 
     def __call__(self, x):
-        # TODO: move latent variable sampling from previous RNN block to here
-        # TODO: add prior
-        ...
+        # TODO: ask/research about the importance of remaining connection in original vd-vae
+        q_mu, q_sig = jnp.split(self.q_block(x), 2, axis=-1)
+        p_mu, p_sig = jnp.split(self.p_block(x), 2, axis=-1)
 
-    def gaussian_sampling(self, x):
-        mu, logsigma = jnp.split(x, 2, axis=-1)
+        z = self.gaussian_sampling(q_mu, q_sig)
+        kl = kl_gauss(q_mu, p_mu, q_sig, p_sig)
+
+        x = self.res_block(x + self.z_proj(z))
+        return x, kl
+
+    def gaussian_sampling(self, mu, logsigma):
         y_shape = mu.shape
-
         z = random.normal(self.make_rng("rnn_gaussian_sampling"), y_shape)
         return mu + z * jnp.exp(logsigma)
 
 
 def get_model_and_state(seed):
-    model = RNNBlock(n_layers=n_layers, d_hidden=d_hidden, d_out=d_out, bidirectional=False)
+    model = DecoderBlock(d_in=d_in, d_hidden=d_hidden, d_out=d_out)
 
     key = random.key(0)
     inp = jnp.zeros((seq_len, bs, d_in))
@@ -128,12 +131,14 @@ def get_model_and_state(seed):
 n_layers = 3
 bs = 32
 seq_len = 784
-d_in = 1
+d_in = 2
 d_hidden = 512
-d_out = 1
+d_out = 2
 
 model, state = get_model_and_state(seed=42)
 key = random.key(0)
 inp = random.normal(random.key(0), (seq_len, bs, d_in))
 print(inp.shape)
-print(model.apply(state, inp, rngs={"params": random.key(0)}).shape)
+out = model.apply(state, inp, rngs={"params": random.key(0)})
+print("x:", out[0].shape)
+print("kl:", out[1].shape)
