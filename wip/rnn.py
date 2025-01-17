@@ -69,7 +69,7 @@ class RNNBlock(nn.Module):
     def setup(self):
         self.initial = nn.Dense(self.d_hidden)
         self.layers = [
-            RNNLayer(d_in=self.d_hidden, d_hidden=self.d_hidden, d_out=self.d_hidden)
+            RNNLayer(d_in=self.d_hidden, d_hidden=self.d_hidden, d_out=self.d_hidden, bidirectional=self.bidirectional)
             for _ in range(self.n_layers)
         ]
         self.final = nn.Dense(self.d_out)
@@ -97,25 +97,31 @@ class DecoderBlock(nn.Module):
 
     def setup(self):
         self.q_block = RNNBlock(n_layers=2, d_hidden=self.d_hidden, d_out=self.d_out * 2, bidirectional=True)
-        self.p_block = RNNBlock(n_layers=2, d_hidden=self.d_hidden, d_out=self.d_out * 2, bidirectional=False)
+        self.p_block = RNNBlock(n_layers=2, d_hidden=self.d_hidden, d_out=self.d_out * 3, bidirectional=False)
         self.res_block = RNNBlock(n_layers=2, d_hidden=self.d_hidden, d_out=self.d_out, use_residual=True)
         self.z_proj = nn.Dense(self.d_out)
 
     def __call__(self, x):
-        # TODO: ask/research about the importance of remaining connection in original vd-vae
+        # TODO: research the importance of prior->x connection in original vd-vae
         q_mu, q_sig = jnp.split(self.q_block(x), 2, axis=-1)
-        p_mu, p_sig = jnp.split(self.p_block(x), 2, axis=-1)
+        p_mu, p_sig, x_p = jnp.split(self.p_block(x), 3, axis=-1)
 
         z = self.gaussian_sampling(q_mu, q_sig)
         kl = kl_gauss(q_mu, p_mu, q_sig, p_sig)
 
-        x = self.res_block(x + self.z_proj(z))
+        x = self.res_block(x + x_p + self.z_proj(z))
         return x, kl
 
     def gaussian_sampling(self, mu, logsigma):
         y_shape = mu.shape
         z = random.normal(self.make_rng("rnn_gaussian_sampling"), y_shape)
         return mu + z * jnp.exp(logsigma)
+
+    def sample_prior(self, x):
+        # TODO: check if x_p should still be used here
+        p_mu, p_sig, x_p = jnp.split(self.p_block(x), 3, axis=-1)
+        z = self.gaussian_sampling(p_mu, p_sig)
+        return self.res_block(x + x_p + self.z_proj(z))
 
 
 def get_model_and_state(seed):
@@ -142,3 +148,6 @@ print(inp.shape)
 out = model.apply(state, inp, rngs={"params": random.key(0)})
 print("x:", out[0].shape)
 print("kl:", out[1].shape)
+
+z = model.apply(state, inp, method=model.sample_prior, rngs={"params": random.key(0)})
+print("z:", z.shape)
