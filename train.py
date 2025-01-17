@@ -42,7 +42,7 @@ def prepend_to_keys(d, s):
 
 
 @jax.tree_util.register_dataclass
-@dataclass
+@dataclass(frozen=True)
 class TrainState:
     weights: Any
     optimizer_state: Any
@@ -101,8 +101,8 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
     # TODO shuffle data
     for batch in reshape_batches(H.batch_size, data):
         S, metrics = train_iter(H, S, batch)
-        metrics = prepend_to_keys(metrics, "train/")
         if should_log(S.step):
+            metrics = prepend_to_keys(metrics, "train/")
             H.logprint("Train step", step=S.step, **metrics)
     return S
 
