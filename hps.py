@@ -1,6 +1,8 @@
 import dataclasses
 from typing import Optional
 from zlib import adler32
+from os import path
+import os
 
 import optax
 import tyro
@@ -66,6 +68,11 @@ class Hyperparams:
 
 def load_options():
     H = tyro.cli(Hyperparams)
+
+    os.makedirs(H.log_dir, exist_ok=True)
+    with open(path.join(H.log_dir, H.id + ".yaml"), "w") as f:
+        f.write(tyro.to_yaml(H))
+
     if H.enable_wandb:
         import wandb
 
