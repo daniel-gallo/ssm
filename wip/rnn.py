@@ -4,6 +4,9 @@ from jax import random
 from jax.nn.initializers import glorot_normal
 
 
+# TODO: implement full loss computation (likelihood + KLs)
+#
+
 def kl_gauss(mu1, mu2, logsigma1, logsigma2):
     """
     Computes KL divergence between a two sequences of one-dimentional Gaussians.
@@ -163,13 +166,52 @@ class Decoder(nn.Module):
         return x
 
 
+class Encoder(nn.Module):
+    n_blocks: int
+    d_hidden: int
+    d_out: int
+
+    def setup(self):
+        self.initial = nn.Dense(self.d_out)
+        self.blocks = [RNNBlock(
+            n_layers=2, d_hidden=self.d_hidden, d_out=self.d_out, bidirectional=True)
+        for _ in range(self.n_blocks)]
+
+    def __call__(self, x):
+        x = self.initial(x)
+        cond_enc = []
+        for block in self.blocks:
+            x = block(x)
+            cond_enc.append(x)
+        return cond_enc
+
+
+class VSSM(nn.Module):
+    n_blocks: int # for now shared between Dec and Enc
+    d_hidden: int
+    d_latent: int
+    d_out: int
+
+    def setup(self):
+        self.encoder = Encoder(n_blocks=self.n_blocks, d_hidden=self.d_hidden, d_out=self.d_latent)
+        self.decoder = Decoder(n_blocks=self.n_blocks, d_hidden=self.d_hidden, d_z=self.d_latent, d_out=self.d_out)
+
+    def __call__(self, x):
+        cond_enc = self.encoder(x)
+        x, kl = self.decoder(cond_enc)
+        return x, kl
+
+    def sample_prior(self, gen_len, n_samples):
+        return self.decoder.sample_prior(gen_len, n_samples)
+
+
 def get_model_and_state(seed):
-    model = Decoder(n_blocks=n_blocks, d_hidden=d_hidden, d_z=d_z, d_out=d_out)
+    model = VSSM(n_blocks=n_blocks, d_hidden=d_hidden, d_latent=d_z, d_out=d_out)
 
     key = random.key(0)
     inp = jnp.zeros((seq_len, bs, d_in))
     enc_cond = random.normal(random.key(0), (seq_len, bs, d_hidden))
-    state = model.init(key, 2 * [enc_cond])
+    state = model.init(key, inp)
 
     return model, state
 
@@ -189,7 +231,7 @@ inp = random.normal(random.key(0), (seq_len, bs, d_in))
 enc_cond = random.normal(random.key(0), (seq_len, bs, d_hidden))
 
 print(inp.shape)
-out = model.apply(state, 2 * [enc_cond], rngs={"params": random.key(0)})
+out = model.apply(state, inp, rngs={"params": random.key(0)})
 print("x:", out[0].shape)
 print("kl:", len(out[1]))
 
