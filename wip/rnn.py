@@ -7,11 +7,19 @@ from jax.nn.initializers import glorot_normal
 # TODO: implement full loss computation (likelihood + KLs)
 #
 
+
 def kl_gauss(mu1, mu2, logsigma1, logsigma2):
     """
     Computes KL divergence between a two sequences of one-dimentional Gaussians.
     """
-    return logsigma2 - logsigma1 + (jnp.exp(logsigma1)**2 + (mu1 - mu2)**2) / (2 * jnp.exp(logsigma2)**2) - 0.5
+    return (
+        logsigma2
+        - logsigma1
+        + (jnp.exp(logsigma1) ** 2 + (mu1 - mu2) ** 2)
+        / (2 * jnp.exp(logsigma2) ** 2)
+        - 0.5
+    )
+
 
 def gaussian_sampling(mu, logsigma, rng):
     y_shape = mu.shape
@@ -77,7 +85,12 @@ class RNNBlock(nn.Module):
     def setup(self):
         self.initial = nn.Dense(self.d_hidden)
         self.layers = [
-            RNNLayer(d_in=self.d_hidden, d_hidden=self.d_hidden, d_out=self.d_hidden, bidirectional=self.bidirectional)
+            RNNLayer(
+                d_in=self.d_hidden,
+                d_hidden=self.d_hidden,
+                d_out=self.d_hidden,
+                bidirectional=self.bidirectional,
+            )
             for _ in range(self.n_layers)
         ]
         self.final = nn.Dense(self.d_out)
@@ -105,14 +118,33 @@ class DecoderBlock(nn.Module):
     d_out: int
 
     def setup(self):
-        self.q_block = RNNBlock(n_layers=2, d_hidden=self.d_hidden, d_out=self.d_z * 2, bidirectional=True)
-        self.p_block = RNNBlock(n_layers=2, d_hidden=self.d_hidden, d_out=self.d_z * 2 + self.d_in, bidirectional=False)
-        self.res_block = RNNBlock(n_layers=2, d_hidden=self.d_hidden, d_out=self.d_out, use_residual=True)
+        self.q_block = RNNBlock(
+            n_layers=2,
+            d_hidden=self.d_hidden,
+            d_out=self.d_z * 2,
+            bidirectional=True,
+        )
+        self.p_block = RNNBlock(
+            n_layers=2,
+            d_hidden=self.d_hidden,
+            d_out=self.d_z * 2 + self.d_in,
+            bidirectional=False,
+        )
+        self.res_block = RNNBlock(
+            n_layers=2,
+            d_hidden=self.d_hidden,
+            d_out=self.d_out,
+            use_residual=True,
+        )
         self.z_proj = nn.Dense(self.d_in)
 
     def __call__(self, x, cond_enc, rng):
-        q_mu, q_sig = jnp.split(self.q_block(jnp.concat([x, cond_enc], axis=-1)), 2, axis=-1)
-        p_mu, p_sig, x_p = jnp.split(self.p_block(x), [self.d_z, self.d_z * 2], axis=-1)
+        q_mu, q_sig = jnp.split(
+            self.q_block(jnp.concat([x, cond_enc], axis=-1)), 2, axis=-1
+        )
+        p_mu, p_sig, x_p = jnp.split(
+            self.p_block(x), [self.d_z, self.d_z * 2], axis=-1
+        )
 
         z = gaussian_sampling(q_mu, q_sig, rng)
         kl = kl_gauss(q_mu, p_mu, q_sig, p_sig)
@@ -141,9 +173,15 @@ class Decoder(nn.Module):
     d_out: int
 
     def setup(self):
-        self.blocks = [DecoderBlock(
-            d_in=self.d_z, d_hidden=self.d_hidden, d_z=self.d_z, d_out=self.d_z)
-        for _ in range(self.n_blocks)]
+        self.blocks = [
+            DecoderBlock(
+                d_in=self.d_z,
+                d_hidden=self.d_hidden,
+                d_z=self.d_z,
+                d_out=self.d_z,
+            )
+            for _ in range(self.n_blocks)
+        ]
         # TODO: consider stochastic prior for x initialisation (excessive stochastisity?)
         self.x_bias = self.param("x_bias", nn.initializers.zeros, (self.d_z,))
         self.final = nn.Dense(self.d_out)
@@ -175,9 +213,15 @@ class Encoder(nn.Module):
 
     def setup(self):
         self.initial = nn.Dense(self.d_out)
-        self.blocks = [RNNBlock(
-            n_layers=2, d_hidden=self.d_hidden, d_out=self.d_out, bidirectional=True)
-        for _ in range(self.n_blocks)]
+        self.blocks = [
+            RNNBlock(
+                n_layers=2,
+                d_hidden=self.d_hidden,
+                d_out=self.d_out,
+                bidirectional=True,
+            )
+            for _ in range(self.n_blocks)
+        ]
 
     def __call__(self, x):
         x = self.initial(x)
@@ -189,14 +233,21 @@ class Encoder(nn.Module):
 
 
 class VSSM(nn.Module):
-    n_blocks: int # for now shared between Dec and Enc
+    n_blocks: int  # for now shared between Dec and Enc
     d_hidden: int
     d_latent: int
     d_out: int
 
     def setup(self):
-        self.encoder = Encoder(n_blocks=self.n_blocks, d_hidden=self.d_hidden, d_out=self.d_latent)
-        self.decoder = Decoder(n_blocks=self.n_blocks, d_hidden=self.d_hidden, d_z=self.d_latent, d_out=self.d_out)
+        self.encoder = Encoder(
+            n_blocks=self.n_blocks, d_hidden=self.d_hidden, d_out=self.d_latent
+        )
+        self.decoder = Decoder(
+            n_blocks=self.n_blocks,
+            d_hidden=self.d_hidden,
+            d_z=self.d_latent,
+            d_out=self.d_out,
+        )
 
     def __call__(self, x, rng):
         cond_enc = self.encoder(x)
@@ -208,7 +259,9 @@ class VSSM(nn.Module):
 
 
 def get_model_and_state(seed):
-    model = VSSM(n_blocks=n_blocks, d_hidden=d_hidden, d_latent=d_z, d_out=d_out)
+    model = VSSM(
+        n_blocks=n_blocks, d_hidden=d_hidden, d_latent=d_z, d_out=d_out
+    )
 
     key = random.key(seed)
     inp = jnp.zeros((seq_len, bs, d_in))
