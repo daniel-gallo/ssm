@@ -110,20 +110,20 @@ class DecoderBlock(nn.Module):
         self.res_block = RNNBlock(n_layers=2, d_hidden=self.d_hidden, d_out=self.d_out, use_residual=True)
         self.z_proj = nn.Dense(self.d_in)
 
-    def __call__(self, x, cond_enc):
+    def __call__(self, x, cond_enc, rng):
         q_mu, q_sig = jnp.split(self.q_block(jnp.concat([x, cond_enc], axis=-1)), 2, axis=-1)
         p_mu, p_sig, x_p = jnp.split(self.p_block(x), [self.d_z, self.d_z * 2], axis=-1)
 
-        z = gaussian_sampling(q_mu, q_sig, self.make_rng("rnn_gaussian_sampling"))
+        z = gaussian_sampling(q_mu, q_sig, rng)
         kl = kl_gauss(q_mu, p_mu, q_sig, p_sig)
 
         x = self.res_block(x + x_p + self.z_proj(z))
         return x, kl
 
-    def sample_prior(self, x):
+    def sample_prior(self, x, rng):
         # TODO: check if x_p should still be used here
         p_mu, p_sig, x_p = jnp.split(self.p_block(x), 3, axis=-1)
-        z = gaussian_sampling(p_mu, p_sig, self.make_rng("rnn_gaussian_sampling"))
+        z = gaussian_sampling(p_mu, p_sig, rng)
         return self.res_block(x + x_p + self.z_proj(z))
 
 
@@ -148,20 +148,22 @@ class Decoder(nn.Module):
         self.x_bias = self.param("x_bias", nn.initializers.zeros, (self.d_z,))
         self.final = nn.Dense(self.d_out)
 
-    def __call__(self, cond_enc):
+    def __call__(self, cond_enc, rng):
         # TODO: consider if it is useful to store sampled latents as well
         kl_all = []
         x = jnp.broadcast_to(self.x_bias, cond_enc[-1].shape[:-1] + (self.d_z,))
         for block_id, block in enumerate(self.blocks):
-            x, kl = block(x, cond_enc[-1 - block_id])
+            rng, block_rng = random.split(rng)
+            x, kl = block(x, cond_enc[-1 - block_id], block_rng)
             kl_all.append(kl)
         x = self.final(x)
         return x, kl_all
 
-    def sample_prior(self, gen_len, n_samples):
+    def sample_prior(self, gen_len, n_samples, rng):
         x = jnp.broadcast_to(self.x_bias, (gen_len, n_samples, self.d_z))
         for block in self.blocks:
-            x = block.sample_prior(x)
+            rng, block_rng = random.split(rng)
+            x = block.sample_prior(x, block_rng)
         x = self.final(x)
         return x
 
@@ -196,22 +198,21 @@ class VSSM(nn.Module):
         self.encoder = Encoder(n_blocks=self.n_blocks, d_hidden=self.d_hidden, d_out=self.d_latent)
         self.decoder = Decoder(n_blocks=self.n_blocks, d_hidden=self.d_hidden, d_z=self.d_latent, d_out=self.d_out)
 
-    def __call__(self, x):
+    def __call__(self, x, rng):
         cond_enc = self.encoder(x)
-        x, kl = self.decoder(cond_enc)
+        x, kl = self.decoder(cond_enc, rng)
         return x, kl
 
-    def sample_prior(self, gen_len, n_samples):
-        return self.decoder.sample_prior(gen_len, n_samples)
+    def sample_prior(self, gen_len, n_samples, rng):
+        return self.decoder.sample_prior(gen_len, n_samples, rng)
 
 
 def get_model_and_state(seed):
     model = VSSM(n_blocks=n_blocks, d_hidden=d_hidden, d_latent=d_z, d_out=d_out)
 
-    key = random.key(0)
+    key = random.key(seed)
     inp = jnp.zeros((seq_len, bs, d_in))
-    enc_cond = random.normal(random.key(0), (seq_len, bs, d_hidden))
-    state = model.init(key, inp)
+    state = model.init(key, inp, key)
 
     return model, state
 
@@ -231,9 +232,9 @@ inp = random.normal(random.key(0), (seq_len, bs, d_in))
 enc_cond = random.normal(random.key(0), (seq_len, bs, d_hidden))
 
 print(inp.shape)
-out = model.apply(state, inp, rngs={"params": random.key(0)})
+out = model.apply(state, inp, key)
 print("x:", out[0].shape)
 print("kl:", len(out[1]))
 
-z = model.apply(state, seq_len, bs, method=model.sample_prior, rngs={"params": random.key(0)})
+z = model.apply(state, seq_len, bs, key, method=model.sample_prior)
 print("z:", z.shape)
