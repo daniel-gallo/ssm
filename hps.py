@@ -23,6 +23,7 @@ class Hyperparams:
     learning_rate: float = 1e-3
     grad_clip: float = 200
     skip_threshold: float = 1000
+    shuffle_before_epoch: bool = False
 
     enable_wandb: bool = False
 
@@ -62,6 +63,7 @@ class Hyperparams:
                     self.learning_rate,
                     self.grad_clip,
                     self.skip_threshold,
+                    self.shuffle_before_epoch,
                 )
             ).encode("utf-8")
         )

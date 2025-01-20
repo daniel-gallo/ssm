@@ -1,3 +1,4 @@
+import dataclasses
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -119,7 +120,10 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
     def should_log(step):
         return step.item() in early_logsteps or not step % H.steps_per_print
 
-    # TODO shuffle data
+    if H.shuffle_before_epoch:
+        rng, rng_shuffle = random.split(S.rng)
+        S = dataclasses.replace(S, rng=rng)
+        data = random.permutation(rng_shuffle, data)
     for batch in reshape_batches(H.batch_size, data):
         S, metrics = train_iter(H, S, batch)
         if should_log(S.step):
