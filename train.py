@@ -5,13 +5,12 @@ from os import path
 from typing import Any
 
 import jax
-from jax.util import safe_map
 import jax.numpy as jnp
-from jax import lax
 import numpy as np
 import optax
 from flax.training import checkpoints
-from jax import random, tree_util
+from jax import lax, random, tree_util
+from jax.util import safe_map
 
 from data import load_data
 from hps import Hyperparams, load_options
