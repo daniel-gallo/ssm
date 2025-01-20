@@ -1,2 +1,3 @@
 [tool.ruff]
 line-length = 80
+lint.extend-select = ["I"]
