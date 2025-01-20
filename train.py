@@ -43,7 +43,7 @@ def prepend_to_keys(d, s):
 
 def clip_grad(H: Hyperparams, g, metrics):
     g_flat, treedef = tree_util.tree_flatten(g)
-    norm = jnp.linalg.norm(jnp.array(list(jnp.linalg.norm, g_flat)))
+    norm = jnp.linalg.norm(jnp.array(map(jnp.linalg.norm, g_flat)))
     clip_coeff = jnp.minimum(H.grad_clip / (norm + 1e-6), 1)
 
     skip = jnp.isnan(metrics["loss"]) | ~(norm < H.skip_threshold)
