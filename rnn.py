@@ -1,6 +1,7 @@
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from einops import rearrange
 from jax import random
 from jax.nn.initializers import glorot_normal
 
@@ -14,7 +15,7 @@ class RNNLayer(nn.Module):
 
     @nn.compact
     def __call__(self, x, reverse: bool = False):
-        seq_len, bs, d_in = x.shape
+        bs, seq_len, d_in = x.shape
 
         def stable_init(rng, shape):
             return random.uniform(
@@ -32,7 +33,10 @@ class RNNLayer(nn.Module):
             return h, y
 
         init = jnp.zeros((bs, self.d_hidden))
+        # scan assumes the sequence axis is the first one
+        x = rearrange(x, "bs seq_len d_in -> seq_len bs d_in")
         _, y = jax.lax.scan(f, init, x, reverse=reverse)
+        y = rearrange(y, "seq_len bs d_out -> bs seq_len d_out")
         return y
 
 

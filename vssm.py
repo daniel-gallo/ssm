@@ -177,7 +177,7 @@ def get_model_and_state(seed):
     )
 
     key = random.key(seed)
-    inp = jnp.zeros((seq_len, bs, d_in))
+    inp = jnp.zeros((bs, seq_len, d_in))
     state = model.init(key, inp, key)
 
     return model, state
@@ -194,13 +194,13 @@ d_out = 2
 
 model, state = get_model_and_state(seed=42)
 key = random.key(0)
-inp = random.normal(random.key(0), (seq_len, bs, d_in))
-enc_cond = random.normal(random.key(0), (seq_len, bs, d_hidden))
+inp = random.normal(random.key(0), (bs, seq_len, d_in))
+enc_cond = random.normal(random.key(0), (bs, seq_len, d_hidden))
 
 print(inp.shape)
 out = model.apply(state, inp, key)
 print("x:", out[0].shape)
 print("kl:", len(out[1]))
 
-z = model.apply(state, seq_len, bs, key, method=model.sample_prior)
+z = model.apply(state, bs, seq_len, key, method=model.sample_prior)
 print("z:", z.shape)
