@@ -5,7 +5,9 @@ from os import path
 from typing import Any
 
 import jax
+from jax.util import safe_map
 import jax.numpy as jnp
+from jax import lax
 import numpy as np
 import optax
 from flax.training import checkpoints
@@ -14,6 +16,8 @@ from jax import random, tree_util
 from data import load_data
 from hps import Hyperparams, load_options
 from model import VSSM
+
+map = safe_map
 
 
 def reshape_batches(batch_size, data):
@@ -36,6 +40,21 @@ def accum_metrics(metrics):
 
 def prepend_to_keys(d, s):
     return {s + k: v for k, v in d.items()}
+
+
+def clip_grad(H: Hyperparams, g, metrics):
+    g_flat, treedef = tree_util.tree_flatten(g)
+    norm = jnp.linalg.norm(jnp.array(list(jnp.linalg.norm, g_flat)))
+    clip_coeff = jnp.minimum(H.grad_clip / (norm + 1e-6), 1)
+
+    skip = jnp.isnan(metrics['loss']) | ~(norm < H.skip_threshold)
+    assert jnp.isscalar(skip)
+
+    return treedef.unflatten([clip_coeff * x for x in g_flat]), skip
+
+
+def cond(pred, true_val, false_val):
+    return lax.cond(pred, lambda: true_val, lambda: false_val)
 
 
 @jax.tree_util.register_dataclass
@@ -78,10 +97,17 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
         return VSSM(H).apply(weights, batch, rng_iter)
 
     gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
-    updates, optimizer_state = H.optimizer.update(
+    gradval, skip = clip_grad(H, gradval, metrics)
+
+    updates, optimizer_state_new = H.optimizer.update(
         gradval, S.optimizer_state, S.weights
     )
-    weights = optax.apply_updates(S.weights, updates)
+    weights_new = optax.apply_updates(S.weights, updates)
+
+    optimizer_state, weights = cond(
+        skip, (S.optimizer_state, S.weights), (optimizer_state_new, weights_new)
+    )
+
     return (
         TrainState(weights, optimizer_state, S.step + 1, rng),
         metrics,
