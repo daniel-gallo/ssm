@@ -1,8 +1,8 @@
 import dataclasses
+import os
+from os import path
 from typing import Optional
 from zlib import adler32
-from os import path
-import os
 
 import optax
 import tyro

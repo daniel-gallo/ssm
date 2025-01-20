@@ -1,16 +1,15 @@
+import time
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
-import time
 from os import path
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 from flax.training import checkpoints
-from jax import random
-from jax import tree_util
+from jax import random, tree_util
 
 from data import load_data
 from hps import Hyperparams, load_options
@@ -20,8 +19,7 @@ from model import VSSM
 def reshape_batches(batch_size, data):
     num_batches = len(data) // batch_size
     return np.reshape(
-        data[: batch_size * num_batches],
-        (num_batches, batch_size) + data.shape[1:]
+        data[: batch_size * num_batches], (num_batches, batch_size) + data.shape[1:]
     )
 
 
@@ -32,9 +30,7 @@ def get_epoch(step, batch_size, data_size):
 
 
 def accum_metrics(metrics):
-    return tree_util.tree_map(
-        lambda *args: jnp.mean(jnp.array(args)), *metrics
-    )
+    return tree_util.tree_map(lambda *args: jnp.mean(jnp.array(args)), *metrics)
 
 
 def prepend_to_keys(d, s):
@@ -65,8 +61,7 @@ def load_train_state(H: Hyperparams):
     )
     if latest_checkpoint_path is not None:
         S = checkpoints.restore_checkpoint(
-            path.abspath(H.checkpoint_dir), target=S,
-            prefix=H.checkpoint_prefix
+            path.abspath(H.checkpoint_dir), target=S, prefix=H.checkpoint_prefix
         )
         H.logprint(f"Checkpoint restored from {latest_checkpoint_path}")
     else:
@@ -82,9 +77,7 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
         return VSSM(H).apply(weights, batch, rng_iter)
 
     gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
-    updates, optimizer_state = H.optimizer.update(
-        gradval, S.optimizer_state, S.weights
-    )
+    updates, optimizer_state = H.optimizer.update(gradval, S.optimizer_state, S.weights)
     weights = optax.apply_updates(S.weights, updates)
     return (
         TrainState(weights, optimizer_state, S.step + 1, rng),

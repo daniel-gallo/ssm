@@ -18,7 +18,7 @@ class RNNNode(nn.Module):
             # TODO: make singular values around 1
             return random.normal(rng, shape)
 
-        a = self.param("a", init_fn, (self.d_hidden, ))
+        a = self.param("a", init_fn, (self.d_hidden,))
         b = self.param("b", init_fn, (self.d_in, self.d_hidden))
         c = self.param("c", init_fn, (self.d_hidden, self.d_out))
 

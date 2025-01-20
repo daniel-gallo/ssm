@@ -3,7 +3,6 @@ import jax.numpy as jnp
 from jax import random
 from jax.nn.initializers import glorot_normal
 
-
 # TODO: implement full loss computation (likelihood + KLs)
 #
 
@@ -15,8 +14,7 @@ def kl_gauss(mu1, mu2, logsigma1, logsigma2):
     return (
         logsigma2
         - logsigma1
-        + (jnp.exp(logsigma1) ** 2 + (mu1 - mu2) ** 2)
-        / (2 * jnp.exp(logsigma2) ** 2)
+        + (jnp.exp(logsigma1) ** 2 + (mu1 - mu2) ** 2) / (2 * jnp.exp(logsigma2) ** 2)
         - 0.5
     )
 
@@ -142,9 +140,7 @@ class DecoderBlock(nn.Module):
         q_mu, q_sig = jnp.split(
             self.q_block(jnp.concat([x, cond_enc], axis=-1)), 2, axis=-1
         )
-        p_mu, p_sig, x_p = jnp.split(
-            self.p_block(x), [self.d_z, self.d_z * 2], axis=-1
-        )
+        p_mu, p_sig, x_p = jnp.split(self.p_block(x), [self.d_z, self.d_z * 2], axis=-1)
 
         z = gaussian_sampling(q_mu, q_sig, rng)
         kl = kl_gauss(q_mu, p_mu, q_sig, p_sig)
@@ -259,9 +255,7 @@ class VSSM(nn.Module):
 
 
 def get_model_and_state(seed):
-    model = VSSM(
-        n_blocks=n_blocks, d_hidden=d_hidden, d_latent=d_z, d_out=d_out
-    )
+    model = VSSM(n_blocks=n_blocks, d_hidden=d_hidden, d_latent=d_z, d_out=d_out)
 
     key = random.key(seed)
     inp = jnp.zeros((seq_len, bs, d_in))
