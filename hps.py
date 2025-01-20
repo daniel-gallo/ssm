@@ -16,11 +16,14 @@ class Hyperparams:
     data_dir: str = "data"
     log_dir: str = "logs"
     checkpoint_dir: str = "checkpoints"
+
     dataset: str = "binarized-mnist"
     seed: int = 0
     batch_size: int = 32
-    batch_size_eval: int = 128
     learning_rate: float = 1e-3
+    grad_clip: float = 200
+    skip_threshold: float = 1000
+
     enable_wandb: bool = False
 
     steps_per_print: int = 1000
@@ -28,6 +31,7 @@ class Hyperparams:
     mins_per_checkpoint: float = 30
 
     num_epochs: int = 1
+    batch_size_eval: int = 128
 
     # Other useful meta-data, set automatically
     data_seq_length: Optional[int] = None
@@ -56,6 +60,8 @@ class Hyperparams:
                     self.seed,
                     self.batch_size,
                     self.learning_rate,
+                    self.grad_clip,
+                    self.skip_threshold,
                 )
             ).encode("utf-8")
         )
