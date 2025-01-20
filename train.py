@@ -47,7 +47,7 @@ def clip_grad(H: Hyperparams, g, metrics):
     norm = jnp.linalg.norm(jnp.array(list(jnp.linalg.norm, g_flat)))
     clip_coeff = jnp.minimum(H.grad_clip / (norm + 1e-6), 1)
 
-    skip = jnp.isnan(metrics['loss']) | ~(norm < H.skip_threshold)
+    skip = jnp.isnan(metrics["loss"]) | ~(norm < H.skip_threshold)
     assert jnp.isscalar(skip)
 
     return treedef.unflatten([clip_coeff * x for x in g_flat]), skip
