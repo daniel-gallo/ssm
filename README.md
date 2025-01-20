@@ -1,3 +1,4 @@
+[![pre-commit](https://github.com/daniel-gallo/ssm/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/daniel-gallo/ssm/actions/workflows/pre-commit.yml)
 # Dev instructions
 As linter / formatter, we can use [Ruff](https://docs.astral.sh/ruff/).
 ## Zed instructions
