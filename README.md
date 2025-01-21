@@ -23,20 +23,7 @@ Add this to `~/.config/zed/settings.json`
                 }
             ]
         }
-    },
-    "lsp": {
-        "ruff": {
-            "initialization_options": {
-                "settings": {
-                    "lineLength": 80,
-                    "lint": {
-                        "extendSelect": ["I"]
-                    }
-                }
-            }
-        }
-    },
-
+    }
 }
 
 ```
