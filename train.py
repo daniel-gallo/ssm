@@ -86,7 +86,7 @@ def load_train_state(H: Hyperparams):
         H.logprint(f"Checkpoint restored from {latest_checkpoint_path}")
     else:
         H.logprint("No checkpoint found")
-    return H, S
+    return S
 
 
 @partial(jax.jit, static_argnums=0)
@@ -173,7 +173,7 @@ def main():
     H = load_options()
     H.logprint("Loading data")
     H, data = load_data(H)
-    H, S = load_train_state(H)
+    S = load_train_state(H)
     H.logprint("Training")
     train(H, S, data)
     if H.enable_wandb:
