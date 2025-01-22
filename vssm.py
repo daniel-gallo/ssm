@@ -19,6 +19,29 @@ def kl_gauss(mu1, mu2, logsigma1, logsigma2):
     )
 
 
+def ll_bernoulli(x, targets):
+    """
+    Outputs the log-likelihood for each sample in the batch assuming binary targets.
+
+    Inputs:
+        x: jnp.array of shape [B, C, 1] or [B, C]
+        targets: jnp.array of shape [B, C]
+    """
+    if len(x.shape) == 3:
+        x = x[..., 0]
+    probs = -jnp.logaddexp(0, -x * targets)
+    return jnp.sum(probs, axis=-1)
+
+
+def elbo_binary(x, kl, targets):
+    # TODO: think how to better handle dimensionality of zdim and its impact on kl
+    ndim = jnp.prod(jnp.array(x.shape[1:]))
+    ll = ll_bernoulli(x, targets).mean() / ndim
+    kl = sum(k.sum((1, 2)).mean() for k in kl) / ndim
+    elbo = ll - kl
+    return elbo, ll, kl
+
+
 def gaussian_sampling(mu, logsigma, rng):
     y_shape = mu.shape
     z = random.normal(rng, y_shape)
@@ -80,13 +103,7 @@ class DecoderBlock(nn.Module):
 
 
 class Decoder(nn.Module):
-    # TODO: change the way cond_enc is stored/accessed
-    # CURRENT PROBLEMS:
-    # 1. number of enc. blocks must be the same as dec. blocks
-    # 2. each enc. activation is used instead of every n-th one (or sth even more flexible)
-    #
     # TODO: consider models with diff. number of latent variables per block
-    # TODO: likewise, diff. d_z and d_out per block?
     H: Hyperparams
 
     def setup(self):
@@ -197,12 +214,16 @@ d_out = 2
 model, state = get_model_and_state(seed=42)
 key = random.key(0)
 inp = random.normal(random.key(0), (bs, seq_len, d_in))
+targets = jnp.zeros((bs, seq_len))
 enc_cond = random.normal(random.key(0), (bs, seq_len, d_hidden))
 
 print(inp.shape)
 out = model.apply(state, inp, key)
-print("x:", out[0].shape)
+print("x:", out[0].mean())
 print("kl:", len(out[1]))
+print("kl1:", out[1][0].mean())
+print("kl2:", out[1][1].mean())
+print("ELBO:", elbo_binary(out[0], out[1], targets))
 
 z = model.apply(state, bs, seq_len, key, method=model.sample_prior)
 print("z:", z.shape)
