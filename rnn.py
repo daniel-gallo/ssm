@@ -5,13 +5,13 @@ from einops import rearrange
 from jax import random
 from jax.nn.initializers import glorot_normal
 
+from hps import Hyperparams
+
 
 class RNNLayer(nn.Module):
+    H: Hyperparams
     d_hidden: int
     d_out: int
-    # Values of A should be close to one to avoid exploding / vanishing gradients
-    init_minval: float = 0.999
-    init_maxval: float = 1.001
 
     @nn.compact
     def __call__(self, x, reverse: bool = False):
@@ -19,7 +19,10 @@ class RNNLayer(nn.Module):
 
         def stable_init(rng, shape):
             return random.uniform(
-                rng, shape, minval=self.init_minval, maxval=self.init_maxval
+                rng,
+                shape,
+                minval=self.H.rnn_init_minval,
+                maxval=self.H.rnn_init_maxval,
             )
 
         a = self.param("a", stable_init, (self.d_hidden,))
@@ -41,6 +44,7 @@ class RNNLayer(nn.Module):
 
 
 class RNNBlock(nn.Module):
+    H: Hyperparams
     n_layers: int
     d_hidden: int
     d_out: int
@@ -50,12 +54,12 @@ class RNNBlock(nn.Module):
     def setup(self):
         self.initial = nn.Dense(self.d_hidden)
         self.layers = [
-            RNNLayer(d_hidden=self.d_hidden, d_out=self.d_hidden)
+            RNNLayer(self.H, d_hidden=self.d_hidden, d_out=self.d_hidden)
             for _ in range(self.n_layers)
         ]
         if self.bidirectional:
             self.backward_layers = [
-                RNNLayer(d_hidden=self.d_hidden, d_out=self.d_hidden)
+                RNNLayer(self.H, d_hidden=self.d_hidden, d_out=self.d_hidden)
                 for _ in range(self.n_layers)
             ]
         self.final = nn.Dense(self.d_out)

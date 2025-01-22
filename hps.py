@@ -17,6 +17,20 @@ class Hyperparams:
     log_dir: str = "logs"
     checkpoint_dir: str = "checkpoints"
 
+    encoder_rnn_layers: tuple[int] = (2, 2, 2, 2)
+    encoder_hidden: tuple[int] = (256, 256, 256, 256)
+    encoder_features: tuple[int] = (128, 128, 128, 128, 128)
+
+    decoder_enc_source: tuple[int] = (3, 2, 1, 0)
+    decoder_rnn_layers: tuple[int] = (2, 2, 2, 2)
+    decoder_hidden: tuple[int] = (256, 256, 256, 256)
+    decoder_zdim: tuple[int] = (32, 32, 32, 32)
+    decoder_features: tuple[int] = (128, 128, 128, 128, 128)
+    decoder_dout: int = 2
+
+    rnn_init_minval: float = 0.999
+    rnn_init_maxval: float = 1.001
+
     dataset: str = "binarized-mnist"
     seed: int = 0
     batch_size: int = 32
