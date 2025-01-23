@@ -52,14 +52,12 @@ def mnist_binarized(H):
         train = np.concatenate(
             [np.loadtxt(fname_train_amat), np.loadtxt(fname_val_amat)]
         )
-        train = 2 * train - 1
         np.save(fname_train_np, train)
 
     if path.isfile(fname_test_np):
         test = np.load(fname_test_np)
     else:
         test = np.loadtxt(fname_test_amat)
-        test = 2 * test - 1
         np.save(fname_test_np, test)
 
     # Add a dummy channel dim
