@@ -1,3 +1,4 @@
+import jax
 import flax.linen as nn
 import jax.numpy as jnp
 from jax import random
@@ -19,23 +20,30 @@ def kl_gauss(mu1, mu2, logsigma1, logsigma2):
     )
 
 
-def ll_bernoulli(x, targets):
+def log_likelihood(x, targets):
     """
-    Outputs the log-likelihood for each sample in the batch assuming binary targets.
+    Outputs the log-likelihood for each sample in the batch assuming binary/categorical targets.
 
     Inputs:
-        x: jnp.array of shape [B, C, 1] or [B, C]
-        targets: jnp.array of shape [B, C]
+        x: jnp.array of shape [B, T], [B, T, 1] (for binary) or [B, T, C] (for categorical)
+        targets: jnp.array of shape [B, T]
     """
-    if len(x.shape) == 3:
-        x = x[..., 0]
-    probs = -jnp.logaddexp(0, -x * targets)
-    return jnp.sum(probs, axis=-1)
+    if len(x.shape) == 2 or x.shape[-1] == 1:
+        print("Bin")
+        if len(x.shape) == 3:
+            x = x[..., 0]
+        log_probs = -jnp.logaddexp(0, -x * targets)
+    else:
+        log_probs = jax.nn.log_softmax(x, axis=-1)
+        # TODO: check for simpler way
+        # !! log_probs[targets] behaves differently than in PyTorch !!
+        log_probs = jnp.take_along_axis(x, targets[..., None], axis=-1)
+    return jnp.sum(log_probs, axis=-1)
 
 
 def elbo(x, kl, targets):
-    ndim = x.size
-    ll = ll_bernoulli(x, targets).sum() / ndim
+    ndim = targets.size  # TODO: I think it shouldn't include C dimension
+    ll = log_likelihood(x, targets).sum() / ndim
     kl = {f"kl-{idx}": k.sum() / ndim for idx, k in enumerate(kl)}
     kl_total = sum(kl.values())
     loss = ll - kl_total
@@ -197,7 +205,7 @@ def get_model_and_state(seed):
 
     key = random.key(seed)
     inp = jnp.zeros((bs, seq_len, d_in))
-    targets = jnp.zeros((bs, seq_len))
+    targets = jnp.zeros((bs, seq_len), dtype=jnp.int16)
     state = model.init(key, inp, targets, key)
 
     return model, state
@@ -215,7 +223,7 @@ d_out = 2
 model, state = get_model_and_state(seed=42)
 key = random.key(0)
 inp = random.normal(random.key(0), (bs, seq_len, d_in))
-targets = jnp.zeros((bs, seq_len))
+targets = jnp.zeros((bs, seq_len), dtype=jnp.int16)
 enc_cond = random.normal(random.key(0), (bs, seq_len, d_hidden))
 
 print(inp.shape)
