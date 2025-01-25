@@ -1,7 +1,9 @@
 import flax.linen as nn
+import jax
 import jax.numpy as jnp
 from jax import random
 
+from hps import Hyperparams
 from rnn import RNNBlock
 
 
@@ -18,6 +20,36 @@ def kl_gauss(mu1, mu2, logsigma1, logsigma2):
     )
 
 
+def log_likelihood(x, targets):
+    """
+    Outputs the log-likelihood for each sample in the batch assuming binary/categorical targets.
+
+    Inputs:
+        x: jnp.array of shape [B, T], [B, T, 1] (for binary) or [B, T, C] (for categorical)
+        targets: jnp.array of shape [B, T]
+    """
+    if len(x.shape) == 2 or x.shape[-1] == 1:
+        print("Bin")
+        if len(x.shape) == 3:
+            x = x[..., 0]
+        log_probs = -jnp.logaddexp(0, -x * targets)
+    else:
+        log_probs = jax.nn.log_softmax(x, axis=-1)
+        # TODO: check for simpler way
+        # !! log_probs[targets] behaves differently than in PyTorch !!
+        log_probs = jnp.take_along_axis(x, targets[..., None], axis=-1)
+    return jnp.sum(log_probs, axis=-1)
+
+
+def elbo(x, kl, targets):
+    ndim = targets.size  # TODO: I think it shouldn't include C dimension
+    ll = log_likelihood(x, targets).sum() / ndim
+    kl = {f"kl-{idx}": k.sum() / ndim for idx, k in enumerate(kl)}
+    kl_total = sum(kl.values())
+    loss = ll - kl_total
+    return loss, {"loss": loss, "log-like": ll, "kl-total": kl_total, **kl}
+
+
 def gaussian_sampling(mu, logsigma, rng):
     y_shape = mu.shape
     z = random.normal(rng, y_shape)
@@ -25,26 +57,31 @@ def gaussian_sampling(mu, logsigma, rng):
 
 
 class DecoderBlock(nn.Module):
+    H: Hyperparams
     d_in: int
+    n_layers: int
     d_hidden: int
     d_z: int
     d_out: int
 
     def setup(self):
         self.q_block = RNNBlock(
-            n_layers=2,
+            H=self.H,
+            n_layers=self.n_layers,
             d_hidden=self.d_hidden,
             d_out=self.d_z * 2,
             bidirectional=True,
         )
         self.p_block = RNNBlock(
-            n_layers=2,
+            H=self.H,
+            n_layers=self.n_layers,
             d_hidden=self.d_hidden,
             d_out=self.d_z * 2 + self.d_in,
             bidirectional=False,
         )
         self.res_block = RNNBlock(
-            n_layers=2,
+            H=self.H,
+            n_layers=self.n_layers,
             d_hidden=self.d_hidden,
             d_out=self.d_out,
             use_residual=True,
@@ -66,52 +103,54 @@ class DecoderBlock(nn.Module):
         return x, kl
 
     def sample_prior(self, x, rng):
-        # TODO: check if x_p should still be used here
-        p_mu, p_sig, x_p = jnp.split(self.p_block(x), 3, axis=-1)
+        p_mu, p_sig, x_p = jnp.split(
+            self.p_block(x), [self.d_z, self.d_z * 2], axis=-1
+        )
         z = gaussian_sampling(p_mu, p_sig, rng)
         return self.res_block(x + x_p + self.z_proj(z))
 
 
 class Decoder(nn.Module):
-    # TODO: change the way cond_enc is stored/accessed
-    # CURRENT PROBLEMS:
-    # 1. number of enc. blocks must be the same as dec. blocks
-    # 2. each enc. activation is used instead of every n-th one (or sth even more flexible)
-    #
     # TODO: consider models with diff. number of latent variables per block
-    # TODO: likewise, diff. d_z and d_out per block?
-    n_blocks: int
-    d_hidden: int
-    d_z: int
-    d_out: int
+    H: Hyperparams
 
     def setup(self):
         self.blocks = [
             DecoderBlock(
-                d_in=self.d_z,
-                d_hidden=self.d_hidden,
-                d_z=self.d_z,
-                d_out=self.d_z,
+                H=self.H,
+                n_layers=self.H.decoder_rnn_layers[block],
+                d_in=self.H.decoder_features[block],
+                d_hidden=self.H.decoder_hidden[block],
+                d_z=self.H.decoder_zdim[block],
+                d_out=self.H.decoder_features[block + 1],
             )
-            for _ in range(self.n_blocks)
+            for block in range(len(self.H.decoder_rnn_layers))
         ]
         # TODO: consider stochastic prior for x initialisation (excessive stochastisity?)
-        self.x_bias = self.param("x_bias", nn.initializers.zeros, (self.d_z,))
-        self.final = nn.Dense(self.d_out)
+        self.x_bias = self.param(
+            "x_bias", nn.initializers.zeros, (self.H.decoder_features[0],)
+        )
+        self.final = nn.Dense(self.H.decoder_dout)
 
     def __call__(self, cond_enc, rng):
         # TODO: consider if it is useful to store sampled latents as well
         kl_all = []
-        x = jnp.broadcast_to(self.x_bias, cond_enc[-1].shape[:-1] + (self.d_z,))
+        x = jnp.broadcast_to(
+            self.x_bias, cond_enc[-1].shape[:-1] + (self.H.decoder_features[0],)
+        )
         for block_id, block in enumerate(self.blocks):
             rng, block_rng = random.split(rng)
-            x, kl = block(x, cond_enc[-1 - block_id], block_rng)
+            x, kl = block(
+                x, cond_enc[self.H.decoder_enc_source[block_id]], block_rng
+            )
             kl_all.append(kl)
         x = self.final(x)
         return x, kl_all
 
     def sample_prior(self, gen_len, n_samples, rng):
-        x = jnp.broadcast_to(self.x_bias, (gen_len, n_samples, self.d_z))
+        x = jnp.broadcast_to(
+            self.x_bias, (gen_len, n_samples, self.H.decoder_features[0])
+        )
         for block in self.blocks:
             rng, block_rng = random.split(rng)
             x = block.sample_prior(x, block_rng)
@@ -120,20 +159,19 @@ class Decoder(nn.Module):
 
 
 class Encoder(nn.Module):
-    n_blocks: int
-    d_hidden: int
-    d_out: int
+    H: Hyperparams
 
     def setup(self):
-        self.initial = nn.Dense(self.d_out)
+        self.initial = nn.Dense(self.H.encoder_features[0])
         self.blocks = [
             RNNBlock(
-                n_layers=2,
-                d_hidden=self.d_hidden,
-                d_out=self.d_out,
+                H=self.H,
+                n_layers=self.H.encoder_rnn_layers[block],
+                d_hidden=self.H.encoder_hidden[block],
+                d_out=self.H.encoder_features[block + 1],
                 bidirectional=True,
             )
-            for _ in range(self.n_blocks)
+            for block in range(len(self.H.encoder_rnn_layers))
         ]
 
     def __call__(self, x):
@@ -146,39 +184,29 @@ class Encoder(nn.Module):
 
 
 class VSSM(nn.Module):
-    n_blocks: int  # for now shared between Dec and Enc
-    d_hidden: int
-    d_latent: int
-    d_out: int
+    H: Hyperparams
 
     def setup(self):
-        self.encoder = Encoder(
-            n_blocks=self.n_blocks, d_hidden=self.d_hidden, d_out=self.d_latent
-        )
-        self.decoder = Decoder(
-            n_blocks=self.n_blocks,
-            d_hidden=self.d_hidden,
-            d_z=self.d_latent,
-            d_out=self.d_out,
-        )
+        self.encoder = Encoder(H=self.H)
+        self.decoder = Decoder(H=self.H)
 
-    def __call__(self, x, rng):
+    def __call__(self, x, targets, rng):
         cond_enc = self.encoder(x)
         x, kl = self.decoder(cond_enc, rng)
-        return x, kl
+        return elbo(x, kl, targets)
 
     def sample_prior(self, gen_len, n_samples, rng):
         return self.decoder.sample_prior(gen_len, n_samples, rng)
 
 
 def get_model_and_state(seed):
-    model = VSSM(
-        n_blocks=n_blocks, d_hidden=d_hidden, d_latent=d_z, d_out=d_out
-    )
+    H = Hyperparams()
+    model = VSSM(H=H)
 
     key = random.key(seed)
     inp = jnp.zeros((bs, seq_len, d_in))
-    state = model.init(key, inp, key)
+    targets = jnp.zeros((bs, seq_len), dtype=jnp.int16)
+    state = model.init(key, inp, targets, key)
 
     return model, state
 
@@ -195,12 +223,14 @@ d_out = 2
 model, state = get_model_and_state(seed=42)
 key = random.key(0)
 inp = random.normal(random.key(0), (bs, seq_len, d_in))
+targets = jnp.zeros((bs, seq_len), dtype=jnp.int16)
 enc_cond = random.normal(random.key(0), (bs, seq_len, d_hidden))
 
 print(inp.shape)
-out = model.apply(state, inp, key)
-print("x:", out[0].shape)
-print("kl:", len(out[1]))
+loss, stats = model.apply(state, inp, targets, key)
+print("loss:", loss)
+print("stats:", stats)
+print("log-likelihood:", stats["log-like"])
 
 z = model.apply(state, bs, seq_len, key, method=model.sample_prior)
 print("z:", z.shape)
