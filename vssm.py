@@ -33,13 +33,13 @@ def ll_bernoulli(x, targets):
     return jnp.sum(probs, axis=-1)
 
 
-def elbo_binary(x, kl, targets):
-    # TODO: think how to better handle dimensionality of zdim and its impact on kl
-    ndim = jnp.prod(jnp.array(x.shape[1:]))
-    ll = ll_bernoulli(x, targets).mean() / ndim
-    kl = sum(k.sum((1, 2)).mean() for k in kl) / ndim
-    elbo = ll - kl
-    return elbo, ll, kl
+def elbo(x, kl, targets):
+    ndim = x.size
+    ll = ll_bernoulli(x, targets).sum() / ndim
+    kl = {f"kl-{idx}": k.sum() / ndim for idx, k in enumerate(kl)}
+    kl_total = sum(kl.values())
+    loss = ll - kl_total
+    return loss, {"loss": loss, "log-like": ll, "kl-total": kl_total, **kl}
 
 
 def gaussian_sampling(mu, logsigma, rng):
@@ -182,10 +182,10 @@ class VSSM(nn.Module):
         self.encoder = Encoder(H=self.H)
         self.decoder = Decoder(H=self.H)
 
-    def __call__(self, x, rng):
+    def __call__(self, x, targets, rng):
         cond_enc = self.encoder(x)
         x, kl = self.decoder(cond_enc, rng)
-        return x, kl
+        return elbo(x, kl, targets)
 
     def sample_prior(self, gen_len, n_samples, rng):
         return self.decoder.sample_prior(gen_len, n_samples, rng)
@@ -197,7 +197,8 @@ def get_model_and_state(seed):
 
     key = random.key(seed)
     inp = jnp.zeros((bs, seq_len, d_in))
-    state = model.init(key, inp, key)
+    targets = jnp.zeros((bs, seq_len))
+    state = model.init(key, inp, targets, key)
 
     return model, state
 
@@ -218,12 +219,10 @@ targets = jnp.zeros((bs, seq_len))
 enc_cond = random.normal(random.key(0), (bs, seq_len, d_hidden))
 
 print(inp.shape)
-out = model.apply(state, inp, key)
-print("x:", out[0].mean())
-print("kl:", len(out[1]))
-print("kl1:", out[1][0].mean())
-print("kl2:", out[1][1].mean())
-print("ELBO:", elbo_binary(out[0], out[1], targets))
+loss, stats = model.apply(state, inp, targets, key)
+print("loss:", loss)
+print("stats:", stats)
+print("log-likelihood:", stats["log-like"])
 
 z = model.apply(state, bs, seq_len, key, method=model.sample_prior)
 print("z:", z.shape)
