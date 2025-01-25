@@ -1,10 +1,10 @@
-import jax
 import flax.linen as nn
+import jax
 import jax.numpy as jnp
 from jax import random
 
-from rnn import RNNBlock
 from hps import Hyperparams
+from rnn import RNNBlock
 
 
 def kl_gauss(mu1, mu2, logsigma1, logsigma2):
