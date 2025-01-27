@@ -1,7 +1,7 @@
 import dataclasses
 import os
 from os import path
-from typing import Optional, Callable
+from typing import Callable, Optional
 from zlib import adler32
 
 import optax

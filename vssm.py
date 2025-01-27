@@ -25,9 +25,9 @@ def log_likelihood(logits, x):
     # than take_along_axis
     return jnp.sum(
         jnp.take_along_axis(
-            jax.nn.log_softmax(logits, axis=-1),
-            x[..., None], axis=-1
-        ), axis=-1
+            jax.nn.log_softmax(logits, axis=-1), x[..., None], axis=-1
+        ),
+        axis=-1,
     )
 
 
@@ -139,7 +139,7 @@ class Decoder(nn.Module):
         batch_size, seq_len, _ = x.shape
         x = jnp.reshape(
             self.final(x),
-            (batch_size, seq_len, H.data_num_channels, H.data_num_cats)
+            (batch_size, seq_len, H.data_num_channels, H.data_num_cats),
         )
         return x, kl_all
 

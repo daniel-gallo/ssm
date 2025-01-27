@@ -1,6 +1,6 @@
-from functools import partial
 import dataclasses
 import os
+from functools import partial
 from os import path
 from urllib.request import urlretrieve
 
@@ -47,7 +47,7 @@ def mnist_binarized(H):
             fname_test_amat,
         )
 
-    loadtxt = partial(np.loadtxt, dtype='int32')
+    loadtxt = partial(np.loadtxt, dtype="int32")
     if path.isfile(fname_train_np):
         train = np.load(fname_train_np)
     else:
