@@ -1,3 +1,4 @@
+from functools import partial
 import dataclasses
 import os
 from os import path
@@ -46,18 +47,19 @@ def mnist_binarized(H):
             fname_test_amat,
         )
 
+    loadtxt = partial(np.loadtxt, dtype='int32')
     if path.isfile(fname_train_np):
         train = np.load(fname_train_np)
     else:
         train = np.concatenate(
-            [np.loadtxt(fname_train_amat), np.loadtxt(fname_val_amat)]
+            [loadtxt(fname_train_amat), loadtxt(fname_val_amat)]
         )
         np.save(fname_train_np, train)
 
     if path.isfile(fname_test_np):
         test = np.load(fname_test_np)
     else:
-        test = np.loadtxt(fname_test_amat)
+        test = loadtxt(fname_test_amat)
         np.save(fname_test_np, test)
 
     # Add a dummy channel dim
@@ -70,5 +72,7 @@ def mnist_binarized(H):
         H,
         data_seq_length=784,
         data_num_channels=1,
+        data_num_cats=2,
+        data_preprocess_fn=lambda x: 2 * x - 1,
     )
     return H, (train, test)

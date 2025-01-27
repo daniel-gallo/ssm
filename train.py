@@ -15,7 +15,7 @@ from jax.util import safe_map
 
 from data import load_data
 from hps import Hyperparams, load_options
-from model import VSSM
+from vssm import VSSM
 
 map = safe_map
 
@@ -70,7 +70,7 @@ def load_train_state(H: Hyperparams):
     rng_init, rng_train = random.split(random.PRNGKey(H.seed))
     weights = VSSM(H).init(
         rng_init,
-        jnp.zeros((H.batch_size,) + H.data_shape),
+        jnp.zeros((H.batch_size,) + H.data_shape, "int32"),
         random.PRNGKey(0),
     )
     optimizer_state = H.optimizer.init(weights)

@@ -1,7 +1,7 @@
 import dataclasses
 import os
 from os import path
-from typing import Optional
+from typing import Optional, Callable
 from zlib import adler32
 
 import optax
@@ -27,7 +27,6 @@ class Hyperparams:
     decoder_hidden: tuple[int, ...] = (256, 256)
     decoder_zdim: tuple[int, ...] = (32, 32)
     decoder_features: tuple[int, ...] = (128, 128, 128)
-    decoder_dout: int = 1
 
     rnn_init_minval: float = 0.999 / 256
     rnn_init_maxval: float = 1.001 / 256
@@ -52,6 +51,8 @@ class Hyperparams:
     # Other useful meta-data, set automatically
     data_seq_length: Optional[int] = None
     data_num_channels: Optional[int] = None
+    data_num_cats: Optional[int] = None
+    data_preprocess_fn: Optional[Callable] = None
 
     @property
     def data_shape(self):
@@ -79,6 +80,16 @@ class Hyperparams:
                     self.grad_clip,
                     self.skip_threshold,
                     self.shuffle_before_epoch,
+                    self.encoder_rnn_layers,
+                    self.encoder_hidden,
+                    self.encoder_features,
+                    self.decoder_enc_source,
+                    self.decoder_rnn_layers,
+                    self.decoder_hidden,
+                    self.decoder_zdim,
+                    self.decoder_features,
+                    self.rnn_init_minval,
+                    self.rnn_init_maxval,
                 )
             ).encode("utf-8")
         )
