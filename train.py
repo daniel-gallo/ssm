@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 from flax.training import checkpoints
-from jax import lax, random, tree_util
+from jax import random, tree_util
 from jax.util import safe_map
 
 from data import load_data
