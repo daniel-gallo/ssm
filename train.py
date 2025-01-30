@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 from flax.training import checkpoints
-from jax import lax, random, tree_util
+from jax import random, tree_util
 from jax.util import safe_map
 
 from data import load_data
@@ -54,7 +54,7 @@ def clip_grad(H: Hyperparams, g, metrics):
 
 
 def cond(pred, true_val, false_val):
-    return lax.cond(pred, lambda: true_val, lambda: false_val)
+    return tree_util.tree_map(partial(jnp.where, pred), true_val, false_val)
 
 
 @jax.tree_util.register_dataclass
@@ -173,6 +173,7 @@ def main():
     H = load_options()
     H.logprint("Loading data")
     H, data = load_data(H)
+    H.logprint("Loading train state")
     S = load_train_state(H)
     H.logprint("Training")
     train(H, S, data)
