@@ -19,14 +19,14 @@ class Hyperparams:
 
     # change to tuples per block
     encoder_rnn_layers: tuple[int, ...] = (2, 2)
-    encoder_hidden: tuple[int, ...] = (256, 256)
-    encoder_features: tuple[int, ...] = (128, 128, 128)
+    encoder_hidden: tuple[int, ...] = (64, 64)
+    encoder_features: tuple[int, ...] = (32, 32, 32)
 
     decoder_enc_source: tuple[int, ...] = (1, 0)
     decoder_rnn_layers: tuple[int, ...] = (2, 2)
-    decoder_hidden: tuple[int, ...] = (256, 256)
+    decoder_hidden: tuple[int, ...] = (64, 64)
     decoder_zdim: tuple[int, ...] = (32, 32)
-    decoder_features: tuple[int, ...] = (128, 128, 128)
+    decoder_features: tuple[int, ...] = (16, 16, 16)
 
     rnn_init_minval: float = 0.999 / 256
     rnn_init_maxval: float = 1.001 / 256
