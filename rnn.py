@@ -11,9 +11,10 @@ class RNN(nn.Module):
     H: Hyperparams
     d_hidden: int
     d_out: int
+    reverse: bool = False
 
     @nn.compact
-    def __call__(self, x, reverse: bool = False):
+    def __call__(self, x):
         batch_size, _, _ = x.shape
         def stable_init(rng, shape):
             return random.uniform(
@@ -32,7 +33,7 @@ class RNN(nn.Module):
         x = nn.Dense(self.d_hidden)(x)
         # scan assumes the sequence axis is the first one
         x = rearrange(x, "batch seq chan -> seq batch chan")
-        _, h = jax.lax.scan(f, init, x, reverse=reverse)
+        _, h = jax.lax.scan(f, init, x, reverse=self.reverse)
         h = rearrange(h, "seq batch chan -> batch seq chan")
         return nn.Dense(self.d_out)(h)
 
@@ -53,7 +54,8 @@ class RNNBlock(nn.Module):
         ]
         if self.bidirectional:
             self.backward_layers = [
-                RNN(self.H, d_hidden=self.d_hidden, d_out=self.d_hidden)
+                RNN(self.H, d_hidden=self.d_hidden, d_out=self.d_hidden,
+                    reverse=True)
                 for _ in range(self.n_layers)
             ]
         self.final = nn.Dense(self.d_out)
@@ -67,7 +69,7 @@ class RNNBlock(nn.Module):
 
         for i in range(self.n_layers):
             if self.bidirectional:
-                x = self.layers[i](x) + self.backward_layers[i](x, reverse=True)
+                x = self.layers[i](x) + self.backward_layers[i](x)
             else:
                 x = self.layers[i](x)
             x = nn.relu(x)
