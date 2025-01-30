@@ -53,7 +53,7 @@ class RNNBlock(nn.Module):
 
     def __call__(self, x):
         identity = x
-        x = nn.relu(x)
+        x = nn.gelu(x)
         x_fwd = self.forward(x)
         x = x_fwd + self.backward(x) if self.bidirectional else x_fwd
         return x + identity if self.use_residual else x
@@ -78,9 +78,9 @@ class RNNBlocks(nn.Module):
         self.final = nn.Dense(self.d_out)
 
     def __call__(self, x):
-        x = nn.relu(x)
+        x = nn.gelu(x)
         x = self.initial(x)
         for b in self.blocks:
             x = b(x)
-        x = nn.relu(x)
+        x = nn.gelu(x)
         return self.final(x)
