@@ -68,7 +68,7 @@ class RNNBlocks(nn.Module):
     use_residual: bool = False
 
     def setup(self):
-        self.initial = nn.Dense(self.d_hidden)
+        self.initial = nn.Dense(self.d_out)
         self.blocks = [
             RNNBlock(self.H, d_hidden=self.d_hidden, d_out=self.d_out,
                      bidirectional=self.bidirectional,
