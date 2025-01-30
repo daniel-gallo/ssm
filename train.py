@@ -54,7 +54,7 @@ def clip_grad(H: Hyperparams, g, metrics):
 
 
 def cond(pred, true_val, false_val):
-    return lax.cond(pred, lambda: true_val, lambda: false_val)
+    return tree_util.tree_map(partial(jnp.where, pred), true_val, false_val)
 
 
 @jax.tree_util.register_dataclass
