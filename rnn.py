@@ -3,20 +3,18 @@ import jax
 import jax.numpy as jnp
 from einops import rearrange
 from jax import random
-from jax.nn.initializers import glorot_normal
 
 from hps import Hyperparams
 
 
-class RNNLayer(nn.Module):
+class RNN(nn.Module):
     H: Hyperparams
     d_hidden: int
     d_out: int
 
     @nn.compact
     def __call__(self, x, reverse: bool = False):
-        bs, seq_len, d_in = x.shape
-
+        batch_size, _, _ = x.shape
         def stable_init(rng, shape):
             return random.uniform(
                 rng,
@@ -26,21 +24,17 @@ class RNNLayer(nn.Module):
             )
 
         a = self.param("a", stable_init, (self.d_hidden,))
-        b = self.param("b", glorot_normal(), (d_in, self.d_hidden))
-        c = self.param("c", glorot_normal(), (self.d_hidden, self.d_out))
-
         def f(h, x):
-            h = h * a + x @ b
-            y = h @ c
+            h = a * h + x
+            return h, h
 
-            return h, y
-
-        init = jnp.zeros((bs, self.d_hidden))
+        init = jnp.zeros((batch_size, self.d_hidden))
+        x = nn.Dense(self.d_hidden)(x)
         # scan assumes the sequence axis is the first one
-        x = rearrange(x, "bs seq_len d_in -> seq_len bs d_in")
-        _, y = jax.lax.scan(f, init, x, reverse=reverse)
-        y = rearrange(y, "seq_len bs d_out -> bs seq_len d_out")
-        return y
+        x = rearrange(x, "batch seq chan -> seq batch chan")
+        _, h = jax.lax.scan(f, init, x, reverse=reverse)
+        h = rearrange(h, "seq batch chan -> batch seq chan")
+        return nn.Dense(self.d_out)(h)
 
 
 class RNNBlock(nn.Module):
@@ -54,12 +48,12 @@ class RNNBlock(nn.Module):
     def setup(self):
         self.initial = nn.Dense(self.d_hidden)
         self.layers = [
-            RNNLayer(self.H, d_hidden=self.d_hidden, d_out=self.d_hidden)
+            RNN(self.H, d_hidden=self.d_hidden, d_out=self.d_hidden)
             for _ in range(self.n_layers)
         ]
         if self.bidirectional:
             self.backward_layers = [
-                RNNLayer(self.H, d_hidden=self.d_hidden, d_out=self.d_hidden)
+                RNN(self.H, d_hidden=self.d_hidden, d_out=self.d_hidden)
                 for _ in range(self.n_layers)
             ]
         self.final = nn.Dense(self.d_out)
