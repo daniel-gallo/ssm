@@ -40,6 +40,27 @@ class RNN(nn.Module):
 
 class RNNBlock(nn.Module):
     H: Hyperparams
+    d_hidden: int
+    d_out: int
+    bidirectional: bool = False
+    use_residual: bool = False
+
+    def setup(self):
+        self.forward = RNN(self.H, d_hidden=self.d_hidden, d_out=self.d_out)
+        if self.bidirectional:
+            self.backward = RNN(self.H, d_hidden=self.d_hidden,
+                                d_out=self.d_out, reverse=True)
+
+    def __call__(self, x):
+        identity = x
+        x = nn.relu(x)
+        x_fwd = self.forward(x)
+        x = x_fwd + self.backward(x) if self.bidirectional else x_fwd
+        return x + identity if self.use_residual else x
+
+
+class RNNBlocks(nn.Module):
+    H: Hyperparams
     n_layers: int
     d_hidden: int
     d_out: int
@@ -48,32 +69,18 @@ class RNNBlock(nn.Module):
 
     def setup(self):
         self.initial = nn.Dense(self.d_hidden)
-        self.layers = [
-            RNN(self.H, d_hidden=self.d_hidden, d_out=self.d_hidden)
+        self.blocks = [
+            RNNBlock(self.H, d_hidden=self.d_hidden, d_out=self.d_out,
+                     bidirectional=self.bidirectional,
+                     use_residual=self.use_residual)
             for _ in range(self.n_layers)
         ]
-        if self.bidirectional:
-            self.backward_layers = [
-                RNN(self.H, d_hidden=self.d_hidden, d_out=self.d_hidden,
-                    reverse=True)
-                for _ in range(self.n_layers)
-            ]
         self.final = nn.Dense(self.d_out)
-        if self.use_residual:
-            self.res_proj = nn.Dense(self.d_out)
 
     def __call__(self, x):
-        identity = x
-        x = self.initial(x)
         x = nn.relu(x)
-
-        for i in range(self.n_layers):
-            if self.bidirectional:
-                x = self.layers[i](x) + self.backward_layers[i](x)
-            else:
-                x = self.layers[i](x)
-            x = nn.relu(x)
-
-        x = self.final(x)
-        x = x + self.res_proj(identity) if self.use_residual else x
-        return x
+        x = self.initial(x)
+        for b in self.blocks:
+            x = b(x)
+        x = nn.relu(x)
+        return self.final(x)

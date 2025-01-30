@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from jax import random
 
 from hps import Hyperparams
-from rnn import RNNBlock
+from rnn import RNNBlocks
 
 
 def kl_gauss(mu1, mu2, logsigma1, logsigma2):
@@ -55,21 +55,23 @@ class DecoderBlock(nn.Module):
     d_out: int
 
     def setup(self):
-        self.q_block = RNNBlock(
+        self.q_block = RNNBlocks(
             H=self.H,
             n_layers=self.n_layers,
             d_hidden=self.d_hidden,
             d_out=self.d_z * 2,
             bidirectional=True,
+            use_residual=False
         )
-        self.p_block = RNNBlock(
+        self.p_block = RNNBlocks(
             H=self.H,
             n_layers=self.n_layers,
             d_hidden=self.d_hidden,
             d_out=self.d_z * 2 + self.d_in,
             bidirectional=False,
+            use_residual=False
         )
-        self.res_block = RNNBlock(
+        self.res_block = RNNBlocks(
             H=self.H,
             n_layers=self.n_layers,
             d_hidden=self.d_hidden,
@@ -160,12 +162,13 @@ class Encoder(nn.Module):
     def setup(self):
         self.initial = nn.Dense(self.H.encoder_features[0])
         self.blocks = [
-            RNNBlock(
+            RNNBlocks(
                 H=self.H,
                 n_layers=self.H.encoder_rnn_layers[block],
                 d_hidden=self.H.encoder_hidden[block],
                 d_out=self.H.encoder_features[block + 1],
                 bidirectional=True,
+                use_residual=False,
             )
             for block in range(len(self.H.encoder_rnn_layers))
         ]
