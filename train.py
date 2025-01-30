@@ -173,6 +173,7 @@ def main():
     H = load_options()
     H.logprint("Loading data")
     H, data = load_data(H)
+    H.logprint("Loading train state")
     S = load_train_state(H)
     H.logprint("Training")
     train(H, S, data)
