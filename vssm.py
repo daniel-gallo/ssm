@@ -61,7 +61,7 @@ class DecoderBlock(nn.Module):
             d_hidden=self.d_hidden,
             d_out=self.d_z * 2,
             bidirectional=True,
-            use_residual=False
+            use_residual=False,
         )
         self.p_block = RNNBlocks(
             H=self.H,
@@ -69,7 +69,7 @@ class DecoderBlock(nn.Module):
             d_hidden=self.d_hidden,
             d_out=self.d_z * 2 + self.d_in,
             bidirectional=False,
-            use_residual=False
+            use_residual=False,
         )
         self.res_block = RNNBlocks(
             H=self.H,

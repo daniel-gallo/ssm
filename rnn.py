@@ -16,6 +16,7 @@ class RNN(nn.Module):
     @nn.compact
     def __call__(self, x):
         batch_size, _, _ = x.shape
+
         def stable_init(rng, shape):
             return random.uniform(
                 rng,
@@ -25,6 +26,7 @@ class RNN(nn.Module):
             )
 
         a = self.param("a", stable_init, (self.d_hidden,))
+
         def f(h, x):
             h = a * h + x
             return h, h
@@ -48,8 +50,9 @@ class RNNBlock(nn.Module):
     def setup(self):
         self.forward = RNN(self.H, d_hidden=self.d_hidden, d_out=self.d_out)
         if self.bidirectional:
-            self.backward = RNN(self.H, d_hidden=self.d_hidden,
-                                d_out=self.d_out, reverse=True)
+            self.backward = RNN(
+                self.H, d_hidden=self.d_hidden, d_out=self.d_out, reverse=True
+            )
 
     def __call__(self, x):
         identity = x
@@ -70,9 +73,13 @@ class RNNBlocks(nn.Module):
     def setup(self):
         self.initial = nn.Dense(self.d_out)
         self.blocks = [
-            RNNBlock(self.H, d_hidden=self.d_hidden, d_out=self.d_out,
-                     bidirectional=self.bidirectional,
-                     use_residual=self.use_residual)
+            RNNBlock(
+                self.H,
+                d_hidden=self.d_hidden,
+                d_out=self.d_out,
+                bidirectional=self.bidirectional,
+                use_residual=self.use_residual,
+            )
             for _ in range(self.n_layers)
         ]
         self.final = nn.Dense(self.d_out)
