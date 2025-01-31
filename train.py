@@ -3,12 +3,16 @@ import time
 from dataclasses import dataclass
 from functools import partial
 from os import path
+from pathlib import Path
 from typing import Any
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
 import numpy as np
 import optax
+from einops import rearrange
 from flax.training import checkpoints
 from jax import random, tree_util
 from jax.util import safe_map
@@ -149,6 +153,28 @@ def eval(H: Hyperparams, S: TrainState, data):
     return prepend_to_keys(accum_metrics(metrics), "eval/")
 
 
+def generate_samples(H: Hyperparams, S: TrainState, epoch: int):
+    if H.dataset == "binarized-mnist":
+        sample_dir = Path(H.sample_dir) / H.id / f"epoch-{epoch}"
+        sample_dir.mkdir(parents=True, exist_ok=True)
+
+        vssm = VSSM(H)
+        samples = vssm.apply(
+            S.weights,
+            H.data_seq_length,
+            H.num_samples_per_eval,
+            S.rng,
+            method=vssm.sample_prior,
+        )
+        samples = nn.softmax(samples)[:, :, 1]
+        samples = rearrange(samples, "seq bs -> bs seq")
+        for sample_id, sample in enumerate(samples):
+            sample = sample.reshape(28, 28)
+            plt.imsave(sample_dir / f"{sample_id}.png", sample)
+    else:
+        H.logprint(f"Dataset {H.dataset} does not support sampling")
+
+
 def train(H: Hyperparams, S: TrainState, data):
     data_train, data_test = data
 
@@ -165,8 +191,9 @@ def train(H: Hyperparams, S: TrainState, data):
             t_last_checkpoint = time.time()
         if not e % H.epochs_per_eval:
             H.logprint("Eval", step=S.step, **eval(H, S, data_test))
-        # TODO:
-        #  - optionally generate and save samples
+
+            if H.num_samples_per_eval:
+                generate_samples(H, S, epoch=e)
 
 
 def main():
