@@ -118,7 +118,7 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
     early_logsteps = set(2**e for e in range(12))
 
     def should_log(step):
-        return step.item() in early_logsteps or not step % H.steps_per_print
+        return int(step) in early_logsteps or not step % H.steps_per_print
 
     if H.shuffle_before_epoch:
         rng, rng_shuffle = random.split(S.rng)

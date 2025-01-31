@@ -191,6 +191,7 @@ class VSSM(nn.Module):
 
     def __call__(self, x, rng):
         logits, kls = self.decoder(self.encoder(x), rng)
+        # import pudb; pu.db
         return loss_and_metrics(logits, kls, x)
 
     def sample_prior(self, gen_len, n_samples, rng):
