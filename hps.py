@@ -16,6 +16,7 @@ class Hyperparams:
     data_dir: str = "data"
     log_dir: str = "logs"
     checkpoint_dir: str = "checkpoints"
+    sample_dir: str = "samples"
 
     # change to tuples per block
     encoder_rnn_layers: tuple[int, ...] = (2, 2)
@@ -44,6 +45,7 @@ class Hyperparams:
     steps_per_print: int = 1000
     epochs_per_eval: int = 1
     mins_per_checkpoint: float = 30
+    num_samples_per_eval: int = 8
 
     num_epochs: int = 1
     batch_size_eval: int = 128

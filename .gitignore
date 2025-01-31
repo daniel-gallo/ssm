@@ -174,3 +174,4 @@ data/
 logs/
 checkpoints/
 wandb/
+samples/
