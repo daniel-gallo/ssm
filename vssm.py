@@ -7,43 +7,38 @@ from hps import Hyperparams
 from rnn import RNNBlocks
 
 
-def kl_gauss(mu1, mu2, logsigma1, logsigma2):
-    """
-    Computes KL divergence between a two sequences of one-dimentional Gaussians.
-    """
-    return (
-        logsigma2
-        - logsigma1
-        + (jnp.exp(logsigma1) ** 2 + (mu1 - mu2) ** 2)
-        / (2 * jnp.exp(logsigma2) ** 2)
+def gaussian_kl(q, p):
+    q_mean, q_logstd = q
+    p_mean, p_logstd = p
+    return jnp.sum(
+        p_logstd
+        - q_logstd
+        + (jnp.exp(q_logstd) ** 2 + (q_mean - p_mean) ** 2)
+        / (2 * jnp.exp(p_logstd) ** 2)
         - 0.5
     )
 
 
+def gaussian_sample(p, rng):
+    mean, logstd = p
+    return mean + jnp.exp(logstd) * random.normal(rng, mean.shape)
+
+
 def log_likelihood(logits, x):
-    # TODO: check whether one-hot encoding x and then multiplying is faster
-    # than take_along_axis
+    (bat, seq, chan, cat) = logits.shape
+    assert x.shape == (bat, seq, chan)
     return jnp.sum(
-        jnp.take_along_axis(
-            jax.nn.log_softmax(logits, axis=-1), x[..., None], axis=-1
-        ),
-        axis=-1,
+        jnp.take_along_axis(jax.nn.log_softmax(logits), x[..., None], -1)
     )
 
 
-def loss_and_metrics(logits, kl, x):
-    ndim = x.size
-    ll = log_likelihood(logits, x).sum() / ndim
-    kl = {f"kl-{idx}": k.sum() / ndim for idx, k in enumerate(kl)}
-    kl_total = sum(kl.values())
+def loss_and_metrics(logits, kls, x):
+    size = x.size
+    ll = log_likelihood(logits, x) / size
+    kls = {f"kl-{idx}": k / size for idx, k in enumerate(kls)}
+    kl_total = sum(kls.values())
     loss = -(ll - kl_total)
-    return loss, {"loss": loss, "log-like": ll, "kl-total": kl_total, **kl}
-
-
-def gaussian_sampling(mu, logsigma, rng):
-    y_shape = mu.shape
-    z = random.normal(rng, y_shape)
-    return mu + z * jnp.exp(logsigma)
+    return loss, {"loss": loss, "log-like": ll, "kl-total": kl_total, **kls}
 
 
 class DecoderBlock(nn.Module):
@@ -81,24 +76,22 @@ class DecoderBlock(nn.Module):
         self.z_proj = nn.Dense(self.d_in)
 
     def __call__(self, x, cond_enc, rng):
-        q_mu, q_sig = jnp.split(
+        q = jnp.split(
             self.q_block(jnp.concat([x, cond_enc], axis=-1)), 2, axis=-1
         )
-        p_mu, p_sig, x_p = jnp.split(
-            self.p_block(x), [self.d_z, self.d_z * 2], axis=-1
-        )
+        *p, x_p = jnp.split(self.p_block(x), [self.d_z, self.d_z * 2], axis=-1)
 
-        z = gaussian_sampling(q_mu, q_sig, rng)
-        kl = kl_gauss(q_mu, p_mu, q_sig, p_sig)
+        z = gaussian_sample(q, rng)
+        kl = gaussian_kl(q, p)
 
         x = self.res_block(x + x_p + self.z_proj(z))
         return x, kl
 
     def sample_prior(self, x, rng):
-        p_mu, p_sig, x_p = jnp.split(
+        *p, x_p = jnp.split(
             self.p_block(x), [self.d_z, self.d_z * 2], axis=-1
         )
-        z = gaussian_sampling(p_mu, p_sig, rng)
+        z = gaussian_sample(p, rng)
         return self.res_block(x + x_p + self.z_proj(z))
 
 
