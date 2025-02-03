@@ -25,7 +25,7 @@ def gaussian_sample(p, rng):
 
 
 def log_likelihood(logits, x):
-    (bat, seq, chan, cat) = logits.shape
+    bat, seq, chan, cat = logits.shape
     assert x.shape == (bat, seq, chan)
     return jnp.sum(
         jnp.take_along_axis(jax.nn.log_softmax(logits), x[..., None], -1)
