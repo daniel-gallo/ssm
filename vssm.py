@@ -88,9 +88,7 @@ class DecoderBlock(nn.Module):
         return x, kl
 
     def sample_prior(self, x, rng):
-        *p, x_p = jnp.split(
-            self.p_block(x), [self.d_z, self.d_z * 2], axis=-1
-        )
+        *p, x_p = jnp.split(self.p_block(x), [self.d_z, self.d_z * 2], axis=-1)
         z = gaussian_sample(p, rng)
         return self.res_block(x + x_p + self.z_proj(z))
 
