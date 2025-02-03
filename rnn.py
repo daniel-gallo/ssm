@@ -2,9 +2,14 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from einops import rearrange
-from jax import random
+from jax.scipy.special import expit, logit
 
 from hps import Hyperparams
+
+
+# Want to be able to vary the scale of initialized parameters
+def lecun_normal(scale):
+    return nn.initializers.variance_scaling(scale, "fan_in", "truncated_normal")
 
 
 class RNN(nn.Module):
@@ -18,26 +23,29 @@ class RNN(nn.Module):
         batch_size, _, _ = x.shape
 
         def stable_init(rng, shape):
-            return random.uniform(
-                rng,
-                shape,
-                minval=self.H.rnn_init_minval,
-                maxval=self.H.rnn_init_maxval,
+            r_min, r_max = self.H.rnn_init_minval, self.H.rnn_init_maxval
+            u = jax.random.uniform(
+                key=rng, shape=shape, minval=r_min, maxval=r_max
             )
+            return logit(u)
 
-        a = self.param("a", stable_init, (self.d_hidden,))
+        a_logit = self.param("a_logit", stable_init, (self.d_hidden,))
+        a = expit(a_logit)
 
         def f(h, x):
             h = a * h + x
             return h, h
 
+        dx = nn.Dense(self.d_out)(x)
         init = jnp.zeros((batch_size, self.d_hidden))
         x = nn.Dense(self.d_hidden)(x)
+        if self.H.rnn_norm_input:
+            x = jnp.sqrt(1 - a**2) * x
         # scan assumes the sequence axis is the first one
         x = rearrange(x, "batch seq chan -> seq batch chan")
         _, h = jax.lax.scan(f, init, x, reverse=self.reverse)
         h = rearrange(h, "seq batch chan -> batch seq chan")
-        return nn.Dense(self.d_out)(h)
+        return (dx + nn.Dense(self.d_out)(h)) / 2
 
 
 class RNNBlock(nn.Module):
@@ -58,7 +66,7 @@ class RNNBlock(nn.Module):
         identity = x
         x = nn.gelu(x)
         x_fwd = self.forward(x)
-        x = x_fwd + self.backward(x) if self.bidirectional else x_fwd
+        x = (x_fwd + self.backward(x)) / 2 if self.bidirectional else x_fwd
         return x + identity if self.use_residual else x
 
 
@@ -82,7 +90,9 @@ class RNNBlocks(nn.Module):
             )
             for _ in range(self.n_layers)
         ]
-        self.final = nn.Dense(self.d_out)
+        self.final = nn.Dense(
+            self.d_out, kernel_init=lecun_normal(1 / self.n_layers)
+        )
 
     def __call__(self, x):
         x = nn.gelu(x)

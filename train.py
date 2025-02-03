@@ -3,14 +3,20 @@ import time
 from dataclasses import dataclass
 from functools import partial
 from os import path
+from pathlib import Path
 from typing import Any
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
 import numpy as np
 import optax
+from einops import rearrange
 from flax.training import checkpoints
 from jax import random, tree_util
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 from jax.util import safe_map
 
 from data import load_data
@@ -18,6 +24,9 @@ from hps import Hyperparams, load_options
 from vssm import VSSM
 
 map = safe_map
+_mesh = jax.make_mesh((jax.device_count(),), ("batch",))
+SHARDING_REPLICATED = NamedSharding(_mesh, P())
+SHARDING_BATCH = NamedSharding(_mesh, P("batch"))
 
 
 def reshape_batches(batch_size, data):
@@ -86,6 +95,7 @@ def load_train_state(H: Hyperparams):
         H.logprint(f"Checkpoint restored from {latest_checkpoint_path}")
     else:
         H.logprint("No checkpoint found")
+    S = jax.device_put(S, SHARDING_REPLICATED)
     return S
 
 
@@ -118,13 +128,14 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
     early_logsteps = set(2**e for e in range(12))
 
     def should_log(step):
-        return step.item() in early_logsteps or not step % H.steps_per_print
+        return int(step) in early_logsteps or not step % H.steps_per_print
 
     if H.shuffle_before_epoch:
         rng, rng_shuffle = random.split(S.rng)
         S = dataclasses.replace(S, rng=rng)
         data = random.permutation(rng_shuffle, data)
     for batch in reshape_batches(H.batch_size, data):
+        batch = jax.device_put(batch, SHARDING_BATCH)
         S, metrics = train_iter(H, S, batch)
         if should_log(S.step):
             metrics = prepend_to_keys(metrics, "train/")
@@ -145,8 +156,31 @@ def eval(H: Hyperparams, S: TrainState, data):
     metrics = []
     for batch in reshape_batches(H.batch_size_eval, data):
         rng, rng_iter = random.split(rng)
+        batch = jax.device_put(batch, SHARDING_BATCH)
         metrics.append(eval_iter(H, S, rng_iter, batch))
     return prepend_to_keys(accum_metrics(metrics), "eval/")
+
+
+def generate_samples(H: Hyperparams, S: TrainState, epoch: int):
+    if H.dataset == "binarized-mnist":
+        sample_dir = Path(H.sample_dir) / H.id / f"epoch-{epoch}"
+        sample_dir.mkdir(parents=True, exist_ok=True)
+
+        vssm = VSSM(H)
+        samples = vssm.apply(
+            S.weights,
+            H.data_seq_length,
+            H.num_samples_per_eval,
+            S.rng,
+            method=vssm.sample_prior,
+        )
+        samples = nn.softmax(samples)[:, :, 1]
+        samples = rearrange(samples, "seq bs -> bs seq")
+        for sample_id, sample in enumerate(samples):
+            sample = sample.reshape(28, 28)
+            plt.imsave(sample_dir / f"{sample_id}.png", sample)
+    else:
+        H.logprint(f"Dataset {H.dataset} does not support sampling")
 
 
 def train(H: Hyperparams, S: TrainState, data):
@@ -165,8 +199,9 @@ def train(H: Hyperparams, S: TrainState, data):
             t_last_checkpoint = time.time()
         if not e % H.epochs_per_eval:
             H.logprint("Eval", step=S.step, **eval(H, S, data_test))
-        # TODO:
-        #  - optionally generate and save samples
+
+            if H.num_samples_per_eval:
+                generate_samples(H, S, epoch=e)
 
 
 def main():

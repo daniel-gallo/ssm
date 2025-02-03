@@ -16,6 +16,7 @@ class Hyperparams:
     data_dir: str = "data"
     log_dir: str = "logs"
     checkpoint_dir: str = "checkpoints"
+    sample_dir: str = "samples"
 
     # change to tuples per block
     encoder_rnn_layers: tuple[int, ...] = (2, 2)
@@ -28,8 +29,9 @@ class Hyperparams:
     decoder_zdim: tuple[int, ...] = (32, 32)
     decoder_features: tuple[int, ...] = (16, 16, 16)
 
-    rnn_init_minval: float = 0.999 / 256
-    rnn_init_maxval: float = 1.001 / 256
+    rnn_init_minval: float = 0.4
+    rnn_init_maxval: float = 0.99
+    rnn_norm_input: bool = True
 
     dataset: str = "binarized-mnist"
     seed: int = 0
@@ -44,6 +46,7 @@ class Hyperparams:
     steps_per_print: int = 1000
     epochs_per_eval: int = 1
     mins_per_checkpoint: float = 30
+    num_samples_per_eval: int = 8
 
     num_epochs: int = 1
     batch_size_eval: int = 128
@@ -90,6 +93,7 @@ class Hyperparams:
                     self.decoder_features,
                     self.rnn_init_minval,
                     self.rnn_init_maxval,
+                    self.rnn_norm_input,
                 )
             ).encode("utf-8")
         )
