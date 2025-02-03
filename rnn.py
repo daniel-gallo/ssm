@@ -3,16 +3,13 @@ import jax
 import jax.numpy as jnp
 from einops import rearrange
 from jax.scipy.special import expit, logit
-from jax import random
-import numpy as np
 
 from hps import Hyperparams
 
 
 # Want to be able to vary the scale of initialized parameters
 def lecun_normal(scale):
-    return nn.initializers.variance_scaling(
-        scale, 'fan_in', 'truncated_normal')
+    return nn.initializers.variance_scaling(scale, "fan_in", "truncated_normal")
 
 
 class RNN(nn.Module):
@@ -27,8 +24,9 @@ class RNN(nn.Module):
 
         def stable_init(rng, shape):
             r_min, r_max = self.H.rnn_init_minval, self.H.rnn_init_maxval
-            u = jax.random.uniform(key=rng, shape=shape, minval=r_min,
-                                   maxval=r_max)
+            u = jax.random.uniform(
+                key=rng, shape=shape, minval=r_min, maxval=r_max
+            )
             return logit(u)
 
         a_logit = self.param("a_logit", stable_init, (self.d_hidden,))
@@ -42,7 +40,7 @@ class RNN(nn.Module):
         init = jnp.zeros((batch_size, self.d_hidden))
         x = nn.Dense(self.d_hidden)(x)
         if self.H.rnn_norm_input:
-            x = jnp.sqrt(1 - a ** 2) * x
+            x = jnp.sqrt(1 - a**2) * x
         # scan assumes the sequence axis is the first one
         x = rearrange(x, "batch seq chan -> seq batch chan")
         _, h = jax.lax.scan(f, init, x, reverse=self.reverse)
@@ -93,8 +91,7 @@ class RNNBlocks(nn.Module):
             for _ in range(self.n_layers)
         ]
         self.final = nn.Dense(
-            self.d_out,
-            kernel_init=lecun_normal(1 / self.n_layers)
+            self.d_out, kernel_init=lecun_normal(1 / self.n_layers)
         )
 
     def __call__(self, x):
