@@ -29,8 +29,8 @@ class Hyperparams:
     decoder_zdim: tuple[int, ...] = (32, 32)
     decoder_features: tuple[int, ...] = (16, 16, 16)
 
-    rnn_init_minval: float = .4
-    rnn_init_maxval: float = .99
+    rnn_init_minval: float = 0.4
+    rnn_init_maxval: float = 0.99
     rnn_norm_input: bool = True
 
     dataset: str = "binarized-mnist"
