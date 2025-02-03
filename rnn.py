@@ -20,7 +20,6 @@ class RNN(nn.Module):
     d_hidden: int
     d_out: int
     reverse: bool = False
-    norm_input: bool = True
 
     @nn.compact
     def __call__(self, x):
@@ -42,7 +41,7 @@ class RNN(nn.Module):
         dx = nn.Dense(self.d_out)(x)
         init = jnp.zeros((batch_size, self.d_hidden))
         x = nn.Dense(self.d_hidden)(x)
-        if self.norm_input:
+        if self.H.rnn_norm_input:
             x = jnp.sqrt(1 - a ** 2) * x
         # scan assumes the sequence axis is the first one
         x = rearrange(x, "batch seq chan -> seq batch chan")

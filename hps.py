@@ -31,6 +31,7 @@ class Hyperparams:
 
     rnn_init_minval: float = 0.999 / 256
     rnn_init_maxval: float = 1.001 / 256
+    rnn_norm_input: bool = True
 
     dataset: str = "binarized-mnist"
     seed: int = 0
@@ -92,6 +93,7 @@ class Hyperparams:
                     self.decoder_features,
                     self.rnn_init_minval,
                     self.rnn_init_maxval,
+                    self.rnn_norm_input,
                 )
             ).encode("utf-8")
         )
