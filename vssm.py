@@ -138,7 +138,7 @@ class Decoder(nn.Module):
 
     def sample_prior(self, gen_len, n_samples, rng):
         x = jnp.broadcast_to(
-            self.x_bias, (gen_len, n_samples, self.H.decoder_features[0])
+            self.x_bias, (n_samples, gen_len, self.H.decoder_features[0])
         )
         for block in self.blocks:
             rng, block_rng = random.split(rng)

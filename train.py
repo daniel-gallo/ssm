@@ -175,7 +175,6 @@ def generate_samples(H: Hyperparams, S: TrainState, epoch: int):
             method=vssm.sample_prior,
         )
         samples = nn.softmax(samples)[:, :, 1]
-        samples = rearrange(samples, "seq bs -> bs seq")
         for sample_id, sample in enumerate(samples):
             sample = sample.reshape(28, 28)
             plt.imsave(sample_dir / f"{sample_id}.png", sample)
