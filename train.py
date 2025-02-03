@@ -16,12 +16,16 @@ from einops import rearrange
 from flax.training import checkpoints
 from jax import random, tree_util
 from jax.util import safe_map
+from jax.sharding import PartitionSpec as P, NamedSharding
 
 from data import load_data
 from hps import Hyperparams, load_options
 from vssm import VSSM
 
 map = safe_map
+_mesh = jax.make_mesh((jax.device_count(),), ('batch',))
+SHARDING_REPLICATED = NamedSharding(_mesh, P())
+SHARDING_BATCH = NamedSharding(_mesh, P('batch'))
 
 
 def reshape_batches(batch_size, data):
@@ -90,6 +94,7 @@ def load_train_state(H: Hyperparams):
         H.logprint(f"Checkpoint restored from {latest_checkpoint_path}")
     else:
         H.logprint("No checkpoint found")
+    S = jax.device_put(S, SHARDING_REPLICATED)
     return S
 
 
@@ -129,6 +134,7 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
         S = dataclasses.replace(S, rng=rng)
         data = random.permutation(rng_shuffle, data)
     for batch in reshape_batches(H.batch_size, data):
+        batch = jax.device_put(batch, SHARDING_BATCH)
         S, metrics = train_iter(H, S, batch)
         if should_log(S.step):
             metrics = prepend_to_keys(metrics, "train/")
@@ -149,6 +155,7 @@ def eval(H: Hyperparams, S: TrainState, data):
     metrics = []
     for batch in reshape_batches(H.batch_size_eval, data):
         rng, rng_iter = random.split(rng)
+        batch = jax.device_put(batch, SHARDING_BATCH)
         metrics.append(eval_iter(H, S, rng_iter, batch))
     return prepend_to_keys(accum_metrics(metrics), "eval/")
 
