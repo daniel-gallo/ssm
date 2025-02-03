@@ -15,17 +15,18 @@ import optax
 from einops import rearrange
 from flax.training import checkpoints
 from jax import random, tree_util
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 from jax.util import safe_map
-from jax.sharding import PartitionSpec as P, NamedSharding
 
 from data import load_data
 from hps import Hyperparams, load_options
 from vssm import VSSM
 
 map = safe_map
-_mesh = jax.make_mesh((jax.device_count(),), ('batch',))
+_mesh = jax.make_mesh((jax.device_count(),), ("batch",))
 SHARDING_REPLICATED = NamedSharding(_mesh, P())
-SHARDING_BATCH = NamedSharding(_mesh, P('batch'))
+SHARDING_BATCH = NamedSharding(_mesh, P("batch"))
 
 
 def reshape_batches(batch_size, data):
