@@ -77,7 +77,9 @@ class RGLRU(nn.Module):
 
         init = jnp.zeros((batch_size, self.d_hidden))
         x = rearrange(x, "batch seq chan -> seq batch chan")
-        _, h = jax.lax.scan(f, init, x, reverse=self.reverse)
+        a = rearrange(a, "batch seq chan -> seq batch chan")
+        a_squared = rearrange(a_squared, "batch seq chan -> seq batch chan")
+        _, h = jax.lax.scan(f, init, (x, a, a_squared), reverse=self.reverse)
         h = rearrange(h, "seq batch chan -> batch seq chan")
         return nn.Dense(self.d_hidden)(h)
 
