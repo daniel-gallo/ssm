@@ -20,18 +20,17 @@ class Hyperparams:
 
     # change to tuples per block
     encoder_rnn_layers: tuple[int, ...] = (2, 2)
-    encoder_hidden: tuple[int, ...] = (64, 64)
-    encoder_features: tuple[int, ...] = (32, 32, 32)
 
     decoder_enc_source: tuple[int, ...] = (1, 0)
     decoder_rnn_layers: tuple[int, ...] = (2, 2)
-    decoder_hidden: tuple[int, ...] = (64, 64)
-    decoder_zdim: tuple[int, ...] = (32, 32)
-    decoder_features: tuple[int, ...] = (16, 16, 16)
+
+    zdim: int = 32
 
     rnn_init_minval: float = 0.4
     rnn_init_maxval: float = 0.99
     rnn_norm_input: bool = True
+    rnn_hidden_size: int = 64
+    rnn_out_size: int = 32
 
     dataset: str = "binarized-mnist"
     seed: int = 0
@@ -84,16 +83,14 @@ class Hyperparams:
                     self.skip_threshold,
                     self.shuffle_before_epoch,
                     self.encoder_rnn_layers,
-                    self.encoder_hidden,
-                    self.encoder_features,
                     self.decoder_enc_source,
                     self.decoder_rnn_layers,
-                    self.decoder_hidden,
-                    self.decoder_zdim,
-                    self.decoder_features,
+                    self.zdim,
                     self.rnn_init_minval,
                     self.rnn_init_maxval,
                     self.rnn_norm_input,
+                    self.rnn_hidden_size,
+                    self.rnn_out_size,
                 )
             ).encode("utf-8")
         )

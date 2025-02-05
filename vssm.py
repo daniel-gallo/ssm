@@ -103,16 +103,16 @@ class Decoder(nn.Module):
             DecoderBlock(
                 H=H,
                 n_layers=H.decoder_rnn_layers[block],
-                d_in=H.decoder_features[block],
-                d_hidden=H.decoder_hidden[block],
-                d_z=H.decoder_zdim[block],
-                d_out=H.decoder_features[block + 1],
+                d_in=H.rnn_out_size,
+                d_hidden=H.rnn_hidden_size,
+                d_z=H.zdim,
+                d_out=H.rnn_out_size,
             )
             for block in range(len(H.decoder_rnn_layers))
         ]
         # TODO: consider stochastic prior for x initialisation (excessive stochastisity?)
         self.x_bias = self.param(
-            "x_bias", nn.initializers.zeros, (H.decoder_features[0],)
+            "x_bias", nn.initializers.zeros, (H.rnn_out_size,)
         )
         self.final = nn.Dense(H.data_num_channels * H.data_num_cats)
 
@@ -121,7 +121,7 @@ class Decoder(nn.Module):
         # TODO: consider if it is useful to store sampled latents as well
         kl_all = []
         x = jnp.broadcast_to(
-            self.x_bias, cond_enc[-1].shape[:-1] + (H.decoder_features[0],)
+            self.x_bias, cond_enc[-1].shape[:-1] + (H.rnn_out_size,)
         )
         for block_id, block in enumerate(self.blocks):
             rng, block_rng = random.split(rng)
@@ -138,7 +138,7 @@ class Decoder(nn.Module):
 
     def sample_prior(self, gen_len, n_samples, rng):
         x = jnp.broadcast_to(
-            self.x_bias, (n_samples, gen_len, self.H.decoder_features[0])
+            self.x_bias, (n_samples, gen_len, self.H.rnn_out_size)
         )
         for block in self.blocks:
             rng, block_rng = random.split(rng)
@@ -151,13 +151,13 @@ class Encoder(nn.Module):
     H: Hyperparams
 
     def setup(self):
-        self.initial = nn.Dense(self.H.encoder_features[0])
+        self.initial = nn.Dense(self.H.rnn_out_size)
         self.blocks = [
             RNNBlocks(
                 H=self.H,
                 n_layers=self.H.encoder_rnn_layers[block],
-                d_hidden=self.H.encoder_hidden[block],
-                d_out=self.H.encoder_features[block + 1],
+                d_hidden=self.H.rnn_hidden_size,
+                d_out=self.H.rnn_out_size,
                 bidirectional=True,
                 use_residual=False,
             )
