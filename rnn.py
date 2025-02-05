@@ -12,6 +12,19 @@ def lecun_normal(scale):
     return nn.initializers.variance_scaling(scale, "fan_in", "truncated_normal")
 
 
+def get_sinusoidal_embeddings(batch_size, seq_len, dim):
+    positions = jnp.arange(seq_len)[:, None]  # Shape: (seq_len, 1)
+    div_term = jnp.exp(
+        jnp.arange(0, dim, 2) * (-jnp.log(10000.0) / dim)
+    )  # Shape: (dim/2,)
+
+    pe = jnp.zeros((seq_len, dim))
+    pe = pe.at[:, 0::2].set(jnp.sin(positions * div_term))
+    pe = pe.at[:, 1::2].set(jnp.cos(positions * div_term))
+
+    return jnp.broadcast_to(pe, (batch_size, seq_len, dim))
+
+
 class RNN(nn.Module):
     H: Hyperparams
     d_hidden: int
@@ -20,7 +33,7 @@ class RNN(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        batch_size, _, _ = x.shape
+        batch_size, seq_len, _ = x.shape
 
         def stable_init(rng, shape):
             r_min, r_max = self.H.rnn_init_minval, self.H.rnn_init_maxval
@@ -36,6 +49,8 @@ class RNN(nn.Module):
             h = a * h + x
             return h, h
 
+        if self.H.rnn_pos_embedding:
+            x = jnp.concatenate([x, get_sinusoidal_embeddings(batch_size, seq_len, 16)], -1)
         dx = nn.Dense(self.d_out)(x)
         init = jnp.zeros((batch_size, self.d_hidden))
         x = nn.Dense(self.d_hidden)(x)
@@ -67,7 +82,7 @@ class RNNBlock(nn.Module):
         x = nn.gelu(x)
         x_fwd = self.forward(x)
         x = (x_fwd + self.backward(x)) / 2 if self.bidirectional else x_fwd
-        return x + identity if self.use_residual else x
+        return (x + identity) / 2 if self.use_residual else x
 
 
 class RNNBlocks(nn.Module):
