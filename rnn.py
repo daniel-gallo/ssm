@@ -22,7 +22,8 @@ def get_sinusoidal_embeddings(batch_size, seq_len, dim):
     pe = pe.at[:, 0::2].set(jnp.sin(positions * div_term))
     pe = pe.at[:, 1::2].set(jnp.cos(positions * div_term))
 
-    return jnp.broadcast_to(pe, (batch_size, seq_len, dim))
+    # TODO: find less hacky alternative to dividing by 10 here:
+    return jnp.broadcast_to(pe, (batch_size, seq_len, dim)) / 10
 
 
 class RNN(nn.Module):
