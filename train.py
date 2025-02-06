@@ -12,7 +12,6 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import optax
-from einops import rearrange
 from flax.training import checkpoints
 from jax import random, tree_util
 from jax.sharding import NamedSharding
