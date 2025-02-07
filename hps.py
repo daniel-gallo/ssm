@@ -9,7 +9,6 @@ import tyro
 
 from log_util import logprint
 
-
 _early_logsteps = set(2**e for e in range(12))
 
 
@@ -68,23 +67,22 @@ class Hyperparams:
     def optimizer(self):
         return optax.adamw(self.learning_rate)
 
-    def _should_print(self, step):
-        return int(step) in _early_logsteps or not step % self.steps_per_print
-
     def logprint(self, *args, **kwargs):
         logprint(self.log_dir, self.id, *args, **kwargs)
 
     def logtrain(self, step, metrics):
-        if self._should_print(step):
+        if int(step) in _early_logsteps or not step % self.steps_per_print:
             self.logprint(step=step, **metrics)
         if self.enable_wandb:
             import wandb
+
             wandb.log(metrics, step)
 
     def log(self, step, metrics):
         self.logprint(step=step, **metrics)
         if self.enable_wandb:
             import wandb
+
             wandb.log(metrics, step)
 
     @property
