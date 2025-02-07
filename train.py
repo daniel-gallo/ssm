@@ -136,9 +136,7 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
     for batch in reshape_batches(H.batch_size, data):
         batch = jax.device_put(batch, SHARDING_BATCH)
         S, metrics = train_iter(H, S, batch)
-        if should_log(S.step):
-            metrics = prepend_to_keys(metrics, "train/")
-            H.logprint("Train step", step=S.step, **metrics)
+        H.logtrain(S.step, prepend_to_keys(metrics, "train/"))
     return S
 
 
@@ -196,7 +194,7 @@ def train(H: Hyperparams, S: TrainState, data):
             )
             t_last_checkpoint = time.time()
         if not e % H.epochs_per_eval:
-            H.logprint("Eval", step=S.step, **eval(H, S, data_test))
+            H.log(S.step, eval(H, S, data_test))
 
             if H.num_samples_per_eval:
                 generate_samples(H, S, epoch=e)
