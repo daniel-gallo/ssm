@@ -13,10 +13,8 @@ def lecun_normal(scale):
 
 
 def get_sinusoidal_embeddings(batch_size, seq_len, dim):
-    positions = jnp.arange(seq_len)[:, None]  # Shape: (seq_len, 1)
-    div_term = jnp.exp(
-        jnp.arange(0, dim, 2) * (-jnp.log(10000.0) / dim)
-    )  # Shape: (dim/2,)
+    positions = jnp.arange(seq_len)[:, None]
+    div_term = jnp.exp(jnp.arange(0, dim, 2) * (-jnp.log(10000.0) / dim))
 
     pe = jnp.zeros((seq_len, dim))
     pe = pe.at[:, 0::2].set(jnp.sin(positions * div_term))
