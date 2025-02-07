@@ -194,16 +194,19 @@ def load_sc09(H):
     train = cache["train"].astype(np.int16)
     test = cache["test"].astype(np.int16)
 
+    # Add a dummy channel dim
+    train, test = np.expand_dims(train, -1), np.expand_dims(test, -1)
+
     assert train.dtype == test.dtype == np.int16
-    assert train.shape == (31158, 16000)
-    assert test.shape == (7750, 16000)
+    assert train.shape == (31158, 16000, 1)
+    assert test.shape == (7750, 16000, 1)
 
     H = dataclasses.replace(
         H,
         data_seq_length=seq_len,
         data_num_channels=1,
         data_num_cats=num_cats,
-        data_preprocess_fn=lambda x: 2.0 * x - 1,
+        data_preprocess_fn=lambda x: (2 * x / 256) - 1,
     )
     return H, (train, test)
 
