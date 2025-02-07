@@ -215,8 +215,6 @@ def save_samples(H: Hyperparams, step, samples):
     match H.dataset:
         case "binarized-mnist":
             save_mnist_binarized(H, step, samples)
-        case _:
-            raise NotImplementedError
 
 
 def save_mnist_binarized(H: Hyperparams, step, samples):
