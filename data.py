@@ -1,7 +1,10 @@
 import dataclasses
 import os
+import wave
+import zipfile
 from functools import partial
 from os import path
+from pathlib import Path
 from urllib.request import urlretrieve
 
 import numpy as np
@@ -13,6 +16,8 @@ def load_data(H: Hyperparams):
     match H.dataset:
         case "binarized-mnist":
             H, data = mnist_binarized(H)
+        case "sc09":
+            H, data = sc09(H)
         case _:
             raise ValueError(f'Invalid dataset "{H.dataset}".')
     return H, data
@@ -74,5 +79,116 @@ def mnist_binarized(H):
         data_num_channels=1,
         data_num_cats=2,
         data_preprocess_fn=lambda x: 2 * x - 1,
+    )
+    return H, (train, test)
+
+
+def sc09(H):
+    seq_len = 16_000
+    num_cats = 256
+    base = Path(H.data_dir) / "sc09"
+
+    def maybe_download_data(data_folder: Path):
+        if data_folder.exists():
+            return
+
+        zip_file = data_folder.parent / "sc09.zip"
+        zip_file.parent.mkdir(parents=True, exist_ok=True)
+        if not zip_file.exists():
+            H.logprint("Downloading SC09 zip file...")
+            urlretrieve(
+                "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip?download=true",
+                zip_file,
+            )
+
+        H.logprint("Extracting SC09 zip file...")
+        with zipfile.ZipFile(zip_file, "r") as zip_ref:
+            zip_ref.extractall(zip_file.parent)
+
+    def wav_to_np(path: str) -> np.ndarray:
+        with wave.open(path, "rb") as wav_file:
+            n_frames = wav_file.getnframes()
+            signal = wav_file.readframes(n_frames)
+            return np.frombuffer(signal, dtype=np.int16)
+
+    def np_to_wav(x: np.ndarray, path: str):
+        with wave.open(path, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(x.tobytes())
+
+    def pad(x, seq_len=16_000):
+        n_samples = len(x)
+        padded_x = np.zeros((n_samples, seq_len), dtype=x[0].dtype)
+        for samp_idx, sample in enumerate(x):
+            padded_x[samp_idx, : len(sample)] = sample
+        return padded_x
+
+    def mu_law_encode(x):
+        # See https://en.wikipedia.org/wiki/%CE%9C-law_algorithm
+        # [-2**15, 2**15 - 1] -> [0, 1]
+        x = (x.astype(np.float32) + 32_768) / 65_536
+        # [0, 1] -> [-1, 1]
+        x = 2 * x - 1
+        # [-1, 1] -> [-1, 1] (but squeezed)
+        x = np.sign(x) * np.log1p(255 * np.abs(x)) / np.log1p(255)
+        # [-1, 1] -> [0, 1]
+        x = (x + 1) / 2
+        # [0, 1] -> [0, 255]
+        x = 255 * x
+        x = x.astype(np.int32)
+        return x
+
+    def mu_law_decode(x):
+        # See https://en.wikipedia.org/wiki/%CE%9C-law_algorithm
+        # [0, 255] -> [0, 1]
+        x = x.astype(np.float32) / 255
+        x = np.clip(x, 0, 1)
+        # [0, 1] -> [-1, 1]
+        x = 2 * x - 1
+        # [-1, 1] (squeezed) -> [-1, 1]
+        x = np.sign(x) * ((1 + 255) ** np.abs(x) - 1) / 255
+        # [-1, 1] -> [0, 1]
+        x = (x + 1) / 2
+        # [0, 1] -> [-2**15, 2**15 - 1]
+        x = (x * 65_536 - 32_768).astype(np.int16)
+        return x
+
+    maybe_download_data(base)
+    testing_list = base / "testing_list.txt"
+    validation_list = base / "validation_list.txt"
+    test_tracks = set(
+        testing_list.read_text().splitlines()
+        + validation_list.read_text().splitlines()
+    )
+
+    train = []
+    test = []
+    for track in base.glob("**/*.wav"):
+        label = track.parent.name
+
+        x = train
+        if f"{label}/{track.name}" in test_tracks:
+            x = test
+
+        with wave.open(str(track), "rb") as wav:
+            n_frames = wav.getnframes()
+            signal = wav.readframes(n_frames)
+            audio = np.frombuffer(signal, dtype=np.int16)
+            x.append(audio)
+
+    train = mu_law_encode(pad(train))
+    test = mu_law_encode(pad(test))
+
+    assert train.shape == (31158, 16000)
+    assert test.shape == (7750, 16000)
+
+    H = dataclasses.replace(
+        H,
+        data_seq_length=seq_len,
+        data_num_channels=1,
+        data_num_cats=num_cats,
+        data_preprocess_fn=lambda x: 2.0 * x - 1,
     )
     return H, (train, test)
