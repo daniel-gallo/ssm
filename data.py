@@ -2,9 +2,13 @@ import dataclasses
 import os
 from functools import partial
 from os import path
+from pathlib import Path
 from urllib.request import urlretrieve
 
+import flax.linen as nn
+import jax.numpy as jnp
 import numpy as np
+from PIL import Image
 
 from hps import Hyperparams
 
@@ -12,13 +16,13 @@ from hps import Hyperparams
 def load_data(H: Hyperparams):
     match H.dataset:
         case "binarized-mnist":
-            H, data = mnist_binarized(H)
+            H, data = load_mnist_binarized(H)
         case _:
             raise ValueError(f'Invalid dataset "{H.dataset}".')
     return H, data
 
 
-def mnist_binarized(H):
+def load_mnist_binarized(H: Hyperparams):
     root_dir = path.join(H.data_dir, "mnist-binarized")
     fname_train_amat = path.join(root_dir, "train.amat")
     fname_val_amat = path.join(root_dir, "val.amat")
@@ -76,3 +80,27 @@ def mnist_binarized(H):
         data_preprocess_fn=lambda x: 2 * x - 1,
     )
     return H, (train, test)
+
+
+def save_samples(H: Hyperparams, step, samples):
+    match H.dataset:
+        case "binarized-mnist":
+            save_mnist_binarized(H, step, samples)
+        case _:
+            raise NotImplementedError
+
+
+def save_mnist_binarized(H: Hyperparams, step, samples):
+    batch_size, seq_length, num_channels = samples.shape
+    assert seq_length == 28 * 28
+    assert num_channels == 2
+
+    sample_dir = Path(H.sample_dir) / H.id
+    sample_dir.mkdir(parents=True, exist_ok=True)
+
+    samples = jnp.reshape(samples, (batch_size, 28, 28, 2))
+    samples = jnp.astype(
+        255 * jnp.hstack(nn.softmax(samples)[:, :, :, 1]), "uint8"
+    )
+    samples = Image.fromarray(np.array(samples), mode="L")
+    samples.save(sample_dir / f"step-{step}.png")
