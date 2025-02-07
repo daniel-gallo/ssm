@@ -33,9 +33,9 @@ def log_likelihood(logits, x):
 
 
 def loss_and_metrics(logits, kls, x):
-    size = x.size
-    ll = log_likelihood(logits, x) / size
-    kls = {f"kl-{idx}": k / size for idx, k in enumerate(kls)}
+    normalizer = x.size * jnp.log(2)
+    ll = log_likelihood(logits, x) / normalizer
+    kls = {f"kl-{idx}": k / normalizer for idx, k in enumerate(kls)}
     kl_total = sum(kls.values())
     loss = -(ll - kl_total)
     return loss, {"loss": loss, "log-like": ll, "kl-total": kl_total, **kls}
