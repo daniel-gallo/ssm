@@ -73,30 +73,36 @@ class RGLRU(nn.Module):
     @nn.compact
     def __call__(self, x):
         # TODO: implement BlockDiagonalLinear from RecurrentGemma
-        batch_size, _, _ = x.shape
+        batch_size, seq_len, _ = x.shape
 
-        def recurrence_init(rng, shape):
-            min_rad = self.H.rnn_init_minval
-            max_rad = self.H.rnn_init_maxval
+        def stable_init(rng, shape):
+            r_min, r_max = self.H.rnn_init_minval, self.H.rnn_init_maxval
+            u = jax.random.uniform(
+                key=rng, shape=shape, minval=r_min, maxval=r_max
+            )
+            return logit(u)
 
-            unif = random.uniform(rng, shape=shape)
-            a = 0.5 * jnp.log(unif * (max_rad**2 - min_rad**2) + min_rad**2)
-            return jnp.log(jnp.exp(-a) - 1.0)
-
+        a_logit = self.param("a_logit", stable_init, (self.d_hidden,))
+        a_expit = expit(a_logit)
+        if self.H.rnn_pos_embedding:
+            x = jnp.concatenate(
+                [x, get_sinusoidal_embeddings(batch_size, seq_len, 16)], -1
+            )
+        dx = nn.Dense(self.d_out)(x)
         x = nn.Dense(self.d_hidden)(x)
-
-        a_param = self.param("a", recurrence_init, (self.d_hidden,))
+        if self.H.rnn_norm_input:
+            x = jnp.sqrt(1 - a_expit**2) * x
         gate_x = nn.sigmoid(nn.Dense(self.d_hidden)(x))
         gate_a = nn.sigmoid(nn.Dense(self.d_hidden)(x))
 
-        log_a = -8.0 * gate_a * nn.softplus(a_param)
-        a = jnp.exp(log_a)
-        a_squared = jnp.exp(2 * log_a)
+        a = gate_a * a_expit
+        a_squared = a ** 2
 
         x = gate_x * x
 
         def f(h, x):
-            h = a * h + (1 - a_squared) ** 0.5 * (x)
+            x, a, a_squared = x
+            h = a * h + (1 - a_squared) ** 0.5 * x
             return h, h
 
         init = jnp.zeros((batch_size, self.d_hidden))
@@ -105,7 +111,7 @@ class RGLRU(nn.Module):
         a_squared = rearrange(a_squared, "batch seq chan -> seq batch chan")
         _, h = jax.lax.scan(f, init, (x, a, a_squared), reverse=self.reverse)
         h = rearrange(h, "seq batch chan -> batch seq chan")
-        return nn.Dense(self.d_hidden)(h)
+        return (dx + nn.Dense(self.d_out)(h)) / 2
 
 
 class RNNBlock(nn.Module):
