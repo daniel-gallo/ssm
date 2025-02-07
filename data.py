@@ -234,4 +234,5 @@ def save_mnist_binarized(H: Hyperparams, step, samples):
     samples.save(sample_dir / f"step-{step}.png")
     if H.enable_wandb:
         import wandb
+
         wandb.log({"samples": wandb.Image(samples)}, step)
