@@ -12,7 +12,7 @@ def cast_jax_scalars(d):
     return tree.map(lambda v: v.item() if isinstance(v, jax.Array) else v, d)
 
 
-def logprint(log_dir, name, log_wandb, *args, **kwargs):
+def logprint(log_dir, name, *args, **kwargs):
     args, kwargs = cast_jax_scalars((args, kwargs))
 
     ctime = time.ctime()
@@ -24,11 +24,6 @@ def logprint(log_dir, name, log_wandb, *args, **kwargs):
     if args:
         argdict["message"] = " ".join([str(x) for x in args])
     argdict.update(kwargs)
-
-    if log_wandb:
-        import wandb
-
-        wandb.log(argdict)
 
     text = f"[{ctime}] {argdict}"
     print(text, flush=True)

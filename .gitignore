@@ -174,3 +174,6 @@ data/
 logs/
 checkpoints/
 wandb/
+samples/
+.DS_Store
+.idea

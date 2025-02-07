@@ -9,6 +9,8 @@ import tyro
 
 from log_util import logprint
 
+_early_logsteps = set(2**e for e in range(12))
+
 
 @dataclasses.dataclass(frozen=True)
 class Hyperparams:
@@ -16,20 +18,22 @@ class Hyperparams:
     data_dir: str = "data"
     log_dir: str = "logs"
     checkpoint_dir: str = "checkpoints"
+    sample_dir: str = "samples"
 
     # change to tuples per block
     encoder_rnn_layers: tuple[int, ...] = (2, 2)
-    encoder_hidden: tuple[int, ...] = (64, 64)
-    encoder_features: tuple[int, ...] = (32, 32, 32)
 
     decoder_enc_source: tuple[int, ...] = (1, 0)
     decoder_rnn_layers: tuple[int, ...] = (2, 2)
-    decoder_hidden: tuple[int, ...] = (64, 64)
-    decoder_zdim: tuple[int, ...] = (32, 32)
-    decoder_features: tuple[int, ...] = (16, 16, 16)
 
-    rnn_init_minval: float = 0.999 / 256
-    rnn_init_maxval: float = 1.001 / 256
+    zdim: int = 32
+
+    rnn_init_minval: float = 0.4
+    rnn_init_maxval: float = 0.99
+    rnn_norm_input: bool = True
+    rnn_hidden_size: int = 64
+    rnn_out_size: int = 32
+    rnn_pos_embedding: bool = True
 
     dataset: str = "binarized-mnist"
     seed: int = 0
@@ -44,6 +48,7 @@ class Hyperparams:
     steps_per_print: int = 1000
     epochs_per_eval: int = 1
     mins_per_checkpoint: float = 30
+    num_samples_per_eval: int = 8
 
     num_epochs: int = 1
     batch_size_eval: int = 128
@@ -63,7 +68,22 @@ class Hyperparams:
         return optax.adamw(self.learning_rate)
 
     def logprint(self, *args, **kwargs):
-        logprint(self.log_dir, self.id, self.enable_wandb, *args, **kwargs)
+        logprint(self.log_dir, self.id, *args, **kwargs)
+
+    def logtrain(self, step, metrics):
+        if int(step) in _early_logsteps or not step % self.steps_per_print:
+            self.logprint(step=step, **metrics)
+        if self.enable_wandb:
+            import wandb
+
+            wandb.log(metrics, step)
+
+    def log(self, step, metrics):
+        self.logprint(step=step, **metrics)
+        if self.enable_wandb:
+            import wandb
+
+            wandb.log(metrics, step)
 
     @property
     def id(self):
@@ -81,15 +101,15 @@ class Hyperparams:
                     self.skip_threshold,
                     self.shuffle_before_epoch,
                     self.encoder_rnn_layers,
-                    self.encoder_hidden,
-                    self.encoder_features,
                     self.decoder_enc_source,
                     self.decoder_rnn_layers,
-                    self.decoder_hidden,
-                    self.decoder_zdim,
-                    self.decoder_features,
+                    self.zdim,
                     self.rnn_init_minval,
                     self.rnn_init_maxval,
+                    self.rnn_norm_input,
+                    self.rnn_hidden_size,
+                    self.rnn_out_size,
+                    self.rnn_pos_embedding,
                 )
             ).encode("utf-8")
         )

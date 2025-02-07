@@ -2,9 +2,26 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from einops import rearrange
-from jax import random
+from jax.scipy.special import expit, logit
 
 from hps import Hyperparams
+
+
+# Want to be able to vary the scale of initialized parameters
+def lecun_normal(scale):
+    return nn.initializers.variance_scaling(scale, "fan_in", "truncated_normal")
+
+
+def get_sinusoidal_embeddings(batch_size, seq_len, dim):
+    positions = jnp.arange(seq_len)[:, None]
+    div_term = jnp.exp(jnp.arange(0, dim, 2) * (-jnp.log(10000.0) / dim))
+
+    pe = jnp.zeros((seq_len, dim))
+    pe = pe.at[:, 0::2].set(jnp.sin(positions * div_term))
+    pe = pe.at[:, 1::2].set(jnp.cos(positions * div_term))
+
+    # TODO: find less hacky alternative to dividing by 10 here:
+    return jnp.broadcast_to(pe, (batch_size, seq_len, dim)) / 10
 
 
 class RNN(nn.Module):
@@ -15,29 +32,36 @@ class RNN(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        batch_size, _, _ = x.shape
+        batch_size, seq_len, _ = x.shape
 
         def stable_init(rng, shape):
-            return random.uniform(
-                rng,
-                shape,
-                minval=self.H.rnn_init_minval,
-                maxval=self.H.rnn_init_maxval,
+            r_min, r_max = self.H.rnn_init_minval, self.H.rnn_init_maxval
+            u = jax.random.uniform(
+                key=rng, shape=shape, minval=r_min, maxval=r_max
             )
+            return logit(u)
 
-        a = self.param("a", stable_init, (self.d_hidden,))
+        a_logit = self.param("a_logit", stable_init, (self.d_hidden,))
+        a = expit(a_logit)
 
         def f(h, x):
             h = a * h + x
             return h, h
 
+        if self.H.rnn_pos_embedding:
+            x = jnp.concatenate(
+                [x, get_sinusoidal_embeddings(batch_size, seq_len, 16)], -1
+            )
+        dx = nn.Dense(self.d_out)(x)
         init = jnp.zeros((batch_size, self.d_hidden))
         x = nn.Dense(self.d_hidden)(x)
+        if self.H.rnn_norm_input:
+            x = jnp.sqrt(1 - a**2) * x
         # scan assumes the sequence axis is the first one
         x = rearrange(x, "batch seq chan -> seq batch chan")
         _, h = jax.lax.scan(f, init, x, reverse=self.reverse)
         h = rearrange(h, "seq batch chan -> batch seq chan")
-        return nn.Dense(self.d_out)(h)
+        return (dx + nn.Dense(self.d_out)(h)) / 2
 
 
 class RGLRU(nn.Module):
@@ -103,8 +127,8 @@ class RNNBlock(nn.Module):
         identity = x
         x = nn.gelu(x)
         x_fwd = self.forward(x)
-        x = x_fwd + self.backward(x) if self.bidirectional else x_fwd
-        return x + identity if self.use_residual else x
+        x = (x_fwd + self.backward(x)) / 2 if self.bidirectional else x_fwd
+        return (x + identity) / 2 if self.use_residual else x
 
 
 class RNNBlocks(nn.Module):
@@ -127,7 +151,9 @@ class RNNBlocks(nn.Module):
             )
             for _ in range(self.n_layers)
         ]
-        self.final = nn.Dense(self.d_out)
+        self.final = nn.Dense(
+            self.d_out, kernel_init=lecun_normal(1 / self.n_layers)
+        )
 
     def __call__(self, x):
         x = nn.gelu(x)
