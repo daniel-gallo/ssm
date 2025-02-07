@@ -51,7 +51,9 @@ class RNN(nn.Module):
             return h, h
 
         if self.H.rnn_pos_embedding:
-            x = jnp.concatenate([x, get_sinusoidal_embeddings(batch_size, seq_len, 16)], -1)
+            x = jnp.concatenate(
+                [x, get_sinusoidal_embeddings(batch_size, seq_len, 16)], -1
+            )
         dx = nn.Dense(self.d_out)(x)
         init = jnp.zeros((batch_size, self.d_hidden))
         x = nn.Dense(self.d_hidden)(x)
