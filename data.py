@@ -225,8 +225,13 @@ def save_mnist_binarized(H: Hyperparams, step, samples):
     sample_dir.mkdir(parents=True, exist_ok=True)
 
     samples = jnp.reshape(samples, (batch_size, 28, 28, 2))
+    samples = jnp.repeat(samples, 4, 1)
+    samples = jnp.repeat(samples, 4, 2)
     samples = jnp.astype(
         255 * jnp.hstack(nn.softmax(samples)[:, :, :, 1]), "uint8"
     )
     samples = Image.fromarray(np.array(samples), mode="L")
     samples.save(sample_dir / f"step-{step}.png")
+    if H.enable_wandb:
+        import wandb
+        wandb.log({"samples": wandb.Image(samples)}, step)
