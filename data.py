@@ -88,11 +88,11 @@ def sc09(H):
     num_cats = 256
     base = Path(H.data_dir) / "sc09"
 
-    def maybe_download_data(data_folder: Path):
-        if data_folder.exists():
+    def maybe_download_data():
+        if base.exists():
             return
 
-        zip_file = data_folder.parent / "sc09.zip"
+        zip_file = base.parent / "sc09.zip"
         zip_file.parent.mkdir(parents=True, exist_ok=True)
         if not zip_file.exists():
             H.logprint("Downloading SC09 zip file...")
@@ -155,32 +155,43 @@ def sc09(H):
         x = (x * 65_536 - 32_768).astype(np.int16)
         return x
 
-    maybe_download_data(base)
-    testing_list = base / "testing_list.txt"
-    validation_list = base / "validation_list.txt"
-    test_tracks = set(
-        testing_list.read_text().splitlines()
-        + validation_list.read_text().splitlines()
-    )
+    def maybe_cache_data():
+        if (base / "cache.npz").exists():
+            return
 
-    train = []
-    test = []
-    for track in base.glob("**/*.wav"):
-        label = track.parent.name
+        testing_list = base / "testing_list.txt"
+        validation_list = base / "validation_list.txt"
+        test_tracks = set(
+            testing_list.read_text().splitlines()
+            + validation_list.read_text().splitlines()
+        )
 
-        x = train
-        if f"{label}/{track.name}" in test_tracks:
-            x = test
+        train = []
+        test = []
+        H.logprint("Reading SC09 wav files...")
+        for track in base.glob("**/*.wav"):
+            label = track.parent.name
 
-        with wave.open(str(track), "rb") as wav:
-            n_frames = wav.getnframes()
-            signal = wav.readframes(n_frames)
-            audio = np.frombuffer(signal, dtype=np.int16)
-            x.append(audio)
+            x = train
+            if f"{label}/{track.name}" in test_tracks:
+                x = test
 
-    train = mu_law_encode(pad(train))
-    test = mu_law_encode(pad(test))
+            x.append(wav_to_np(str(track)))
 
+        train = mu_law_encode(pad(train)).astype(np.uint8)
+        test = mu_law_encode(pad(test)).astype(np.uint8)
+
+        np.savez(base / "cache.npz", train=train, test=test)
+
+    maybe_download_data()
+    maybe_cache_data()
+
+    cache = np.load(base / "cache.npz")
+    # The cache is stored as uint8, but I don't want to deal with overflows
+    train = cache["train"].astype(np.int16)
+    test = cache["test"].astype(np.int16)
+
+    assert train.dtype == test.dtype == np.int16
     assert train.shape == (31158, 16000)
     assert test.shape == (7750, 16000)
 
