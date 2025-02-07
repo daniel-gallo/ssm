@@ -31,6 +31,7 @@ class Hyperparams:
     rnn_norm_input: bool = True
     rnn_hidden_size: int = 64
     rnn_out_size: int = 32
+    rnn_pos_embedding: bool = True
 
     dataset: str = "binarized-mnist"
     seed: int = 0
@@ -91,6 +92,7 @@ class Hyperparams:
                     self.rnn_norm_input,
                     self.rnn_hidden_size,
                     self.rnn_out_size,
+                    self.rnn_pos_embedding,
                 )
             ).encode("utf-8")
         )
