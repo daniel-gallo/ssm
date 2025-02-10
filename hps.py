@@ -20,10 +20,7 @@ class Hyperparams:
     checkpoint_dir: str = "checkpoints"
     sample_dir: str = "samples"
 
-    # change to tuples per block
     encoder_rnn_layers: tuple[int, ...] = (2, 2)
-
-    decoder_enc_source: tuple[int, ...] = (1, 0)
     decoder_rnn_layers: tuple[int, ...] = (2, 2)
 
     zdim: int = 32
@@ -101,7 +98,6 @@ class Hyperparams:
                     self.skip_threshold,
                     self.shuffle_before_epoch,
                     self.encoder_rnn_layers,
-                    self.decoder_enc_source,
                     self.decoder_rnn_layers,
                     self.zdim,
                     self.rnn_init_minval,

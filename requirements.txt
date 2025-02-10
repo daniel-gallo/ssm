@@ -5,3 +5,4 @@ flax
 optax
 pytest
 einops
+pillow
