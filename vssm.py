@@ -1,3 +1,5 @@
+from functools import partial
+
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -43,43 +45,34 @@ def loss_and_metrics(logits, kls, x):
 
 class DecoderBlock(nn.Module):
     H: Hyperparams
-    d_in: int
     n_layers: int
-    d_hidden: int
-    d_z: int
-    d_out: int
 
     def setup(self):
-        self.q_block = RNNBlocks(
-            H=self.H,
-            n_layers=self.n_layers,
-            d_hidden=self.d_hidden,
-            d_out=self.d_z * 2,
+        blocks = partial(RNNBlocks, self.H, self.n_layers)
+        self.q_block = blocks(
+            d_out=self.H.zdim * 2,
             bidirectional=True,
-            use_residual=False,
+            residual=False,
         )
-        self.p_block = RNNBlocks(
-            H=self.H,
-            n_layers=self.n_layers,
-            d_hidden=self.d_hidden,
-            d_out=self.d_z * 2 + self.d_in,
+        self.p_block = blocks(
+            d_out=self.H.zdim * 2 + self.H.rnn_out_size,
             bidirectional=False,
-            use_residual=False,
+            residual=False,
         )
-        self.res_block = RNNBlocks(
-            H=self.H,
-            n_layers=self.n_layers,
-            d_hidden=self.d_hidden,
-            d_out=self.d_out,
-            use_residual=True,
+        self.res_block = blocks(
+            d_out=self.H.rnn_out_size,
+            bidirectional=False,
+            residual=True,
         )
-        self.z_proj = nn.Dense(self.d_in)
+        self.z_proj = nn.Dense(self.H.rnn_out_size)
 
     def __call__(self, x, cond_enc, rng):
         q = jnp.split(
             self.q_block(jnp.concat([x, cond_enc], axis=-1)), 2, axis=-1
         )
-        *p, x_p = jnp.split(self.p_block(x), [self.d_z, self.d_z * 2], axis=-1)
+        *p, x_p = jnp.split(
+            self.p_block(x), [self.H.zdim, self.H.zdim * 2], axis=-1
+        )
 
         z = gaussian_sample(q, rng)
         kl = gaussian_kl(q, p)
@@ -88,7 +81,9 @@ class DecoderBlock(nn.Module):
         return x, kl
 
     def sample_prior(self, x, rng):
-        *p, x_p = jnp.split(self.p_block(x), [self.d_z, self.d_z * 2], axis=-1)
+        *p, x_p = jnp.split(
+            self.p_block(x), [self.H.zdim, self.H.zdim * 2], axis=-1
+        )
         z = gaussian_sample(p, rng)
         return self.res_block(x + x_p + self.z_proj(z))
 
@@ -99,18 +94,7 @@ class Decoder(nn.Module):
 
     def setup(self):
         H = self.H
-        self.blocks = [
-            DecoderBlock(
-                H=H,
-                n_layers=H.decoder_rnn_layers[block],
-                d_in=H.rnn_out_size,
-                d_hidden=H.rnn_hidden_size,
-                d_z=H.zdim,
-                d_out=H.rnn_out_size,
-            )
-            for block in range(len(H.decoder_rnn_layers))
-        ]
-        # TODO: consider stochastic prior for x initialisation (excessive stochastisity?)
+        self.blocks = [DecoderBlock(H, depth) for depth in H.decoder_rnn_layers]
         self.x_bias = self.param(
             "x_bias", nn.initializers.zeros, (H.rnn_out_size,)
         )
@@ -119,22 +103,20 @@ class Decoder(nn.Module):
     def __call__(self, cond_enc, rng):
         H = self.H
         # TODO: consider if it is useful to store sampled latents as well
-        kl_all = []
+        kls = []
         x = jnp.broadcast_to(
             self.x_bias, cond_enc[-1].shape[:-1] + (H.rnn_out_size,)
         )
-        for block_id, block in enumerate(self.blocks):
+        for block_id, (block, acts) in enumerate(zip(self.blocks, cond_enc)):
             rng, block_rng = random.split(rng)
-            x, kl = block(
-                x, cond_enc[H.decoder_enc_source[block_id]], block_rng
-            )
-            kl_all.append(kl)
+            x, kl = block(x, acts, block_rng)
+            kls.append(kl)
         batch_size, seq_len, _ = x.shape
         x = jnp.reshape(
             self.final(x),
             (batch_size, seq_len, H.data_num_channels, H.data_num_cats),
         )
-        return x, kl_all
+        return x, kls
 
     def sample_prior(self, gen_len, n_samples, rng):
         x = jnp.broadcast_to(
@@ -155,22 +137,21 @@ class Encoder(nn.Module):
         self.blocks = [
             RNNBlocks(
                 H=self.H,
-                n_layers=self.H.encoder_rnn_layers[block],
-                d_hidden=self.H.rnn_hidden_size,
+                n_layers=depth,
                 d_out=self.H.rnn_out_size,
                 bidirectional=True,
-                use_residual=False,
+                residual=True,
             )
-            for block in range(len(self.H.encoder_rnn_layers))
+            for depth in self.H.encoder_rnn_layers
         ]
 
     def __call__(self, x):
         x = self.initial(self.H.data_preprocess_fn(x))
-        cond_enc = []
+        acts = []
         for block in self.blocks:
             x = block(x)
-            cond_enc.append(x)
-        return cond_enc
+            acts.append(x)
+        return list(reversed(acts))
 
 
 class VSSM(nn.Module):

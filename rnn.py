@@ -66,16 +66,22 @@ class RNN(nn.Module):
 
 class RNNBlock(nn.Module):
     H: Hyperparams
-    d_hidden: int
     d_out: int
     bidirectional: bool = False
-    use_residual: bool = False
+    residual: bool = False
 
     def setup(self):
-        self.forward = RNN(self.H, d_hidden=self.d_hidden, d_out=self.d_out)
+        self.forward = RNN(
+            self.H,
+            d_hidden=self.H.rnn_hidden_size,
+            d_out=self.d_out,
+        )
         if self.bidirectional:
             self.backward = RNN(
-                self.H, d_hidden=self.d_hidden, d_out=self.d_out, reverse=True
+                self.H,
+                d_hidden=self.H.rnn_hidden_size,
+                d_out=self.d_out,
+                reverse=True,
             )
 
     def __call__(self, x):
@@ -83,26 +89,24 @@ class RNNBlock(nn.Module):
         x = nn.gelu(x)
         x_fwd = self.forward(x)
         x = (x_fwd + self.backward(x)) / 2 if self.bidirectional else x_fwd
-        return (x + identity) / 2 if self.use_residual else x
+        return (x + identity) / 2 if self.residual else x
 
 
 class RNNBlocks(nn.Module):
     H: Hyperparams
     n_layers: int
-    d_hidden: int
     d_out: int
     bidirectional: bool = False
-    use_residual: bool = False
+    residual: bool = False
 
     def setup(self):
         self.initial = nn.Dense(self.d_out)
         self.blocks = [
             RNNBlock(
                 self.H,
-                d_hidden=self.d_hidden,
                 d_out=self.d_out,
                 bidirectional=self.bidirectional,
-                use_residual=self.use_residual,
+                residual=self.residual,
             )
             for _ in range(self.n_layers)
         ]
