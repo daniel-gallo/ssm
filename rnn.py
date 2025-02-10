@@ -96,7 +96,7 @@ class RGLRU(nn.Module):
         gate_a = nn.sigmoid(nn.Dense(self.d_hidden)(x))
 
         a = gate_a * a_expit
-        a_squared = a ** 2
+        a_squared = a**2
 
         x = gate_x * x
 
@@ -119,7 +119,7 @@ class RNNBlock(nn.Module):
     d_out: int
     bidirectional: bool = False
     residual: bool = False
-    recurrent_block = RNN    
+    recurrent_block = RNN
 
     def setup(self):
         self.forward = self.recurrent_block(
