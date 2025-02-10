@@ -5,6 +5,7 @@ import zipfile
 from functools import partial
 from os import path
 from pathlib import Path
+from typing import List
 from urllib.request import urlretrieve
 
 import flax.linen as nn
@@ -21,6 +22,10 @@ def load_data(H: Hyperparams):
             H, data = load_mnist_binarized(H)
         case "sc09":
             H, data = load_sc09(H)
+        case "beethoven":
+            H, data = load_beethoven(H)
+        case "youtube_mix":
+            H, data = load_youtube_mix(H)
         case _:
             raise ValueError(f'Invalid dataset "{H.dataset}".')
     return H, data
@@ -86,84 +91,94 @@ def load_mnist_binarized(H: Hyperparams):
     return H, (train, test)
 
 
+def maybe_download(H, url: str, path: Path):
+    if path.exists():
+        return
+
+    H.logprint(f"Downloading {url}...")
+    urlretrieve(url, path)
+
+
+def unzip(H, zip_file: Path, extract_dir: Path):
+    H.logprint(f"Extracting {zip_file}...")
+    with zipfile.ZipFile(zip_file, "r") as zip_ref:
+        zip_ref.extractall(extract_dir)
+
+
+def wav_to_np(path: Path) -> np.ndarray:
+    with wave.open(str(path), "rb") as wav_file:
+        n_frames = wav_file.getnframes()
+        signal = wav_file.readframes(n_frames)
+        return np.frombuffer(signal, dtype=np.int16)
+
+
+def np_to_wav(x: np.ndarray, path: str):
+    with wave.open(path, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(x.tobytes())
+
+
+def pad(x: List[np.ndarray], seq_len: int) -> np.ndarray:
+    n_samples = len(x)
+    padded_x = np.zeros((n_samples, seq_len), dtype=x[0].dtype)
+    for samp_idx, sample in enumerate(x):
+        padded_x[samp_idx, : len(sample)] = sample
+    return padded_x
+
+
+def mu_law_encode(x):
+    # See https://en.wikipedia.org/wiki/%CE%9C-law_algorithm
+    # [-2**15, 2**15 - 1] -> [0, 1]
+    x = (x.astype(np.float32) + 32_768) / 65_536
+    # [0, 1] -> [-1, 1]
+    x = 2 * x - 1
+    # [-1, 1] -> [-1, 1] (but squeezed)
+    x = np.sign(x) * np.log1p(255 * np.abs(x)) / np.log1p(255)
+    # [-1, 1] -> [0, 1]
+    x = (x + 1) / 2
+    # [0, 1] -> [0, 255]
+    x = 255 * x
+    x = x.astype(np.int32)
+    return x
+
+
+def mu_law_decode(x):
+    # See https://en.wikipedia.org/wiki/%CE%9C-law_algorithm
+    # [0, 255] -> [0, 1]
+    x = x.astype(np.float32) / 255
+    x = np.clip(x, 0, 1)
+    # [0, 1] -> [-1, 1]
+    x = 2 * x - 1
+    # [-1, 1] (squeezed) -> [-1, 1]
+    x = np.sign(x) * ((1 + 255) ** np.abs(x) - 1) / 255
+    # [-1, 1] -> [0, 1]
+    x = (x + 1) / 2
+    # [0, 1] -> [-2**15, 2**15 - 1]
+    x = (x * 65_536 - 32_768).astype(np.int16)
+    return x
+
+
 def load_sc09(H):
     seq_len = 16_000
     num_cats = 256
-    base = Path(H.data_dir) / "sc09"
+    data_dir = Path(H.data_dir)
+    base_dir = data_dir / "sc09"
+    zip_file = data_dir / "sc09.zip"
+    cache_file = base_dir / "cache.npz"
 
-    def maybe_download_data():
-        if base.exists():
-            return
+    maybe_download(
+        H,
+        "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip",
+        zip_file,
+    )
+    if not base_dir.exists():
+        unzip(H, zip_file, data_dir)
 
-        zip_file = base.parent / "sc09.zip"
-        zip_file.parent.mkdir(parents=True, exist_ok=True)
-        if not zip_file.exists():
-            H.logprint("Downloading SC09 zip file...")
-            urlretrieve(
-                "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip?download=true",
-                zip_file,
-            )
-
-        H.logprint("Extracting SC09 zip file...")
-        with zipfile.ZipFile(zip_file, "r") as zip_ref:
-            zip_ref.extractall(zip_file.parent)
-
-    def wav_to_np(path: str) -> np.ndarray:
-        with wave.open(path, "rb") as wav_file:
-            n_frames = wav_file.getnframes()
-            signal = wav_file.readframes(n_frames)
-            return np.frombuffer(signal, dtype=np.int16)
-
-    def np_to_wav(x: np.ndarray, path: str):
-        with wave.open(path, "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(16000)
-            wav_file.writeframes(x.tobytes())
-
-    def pad(x, seq_len=16_000):
-        n_samples = len(x)
-        padded_x = np.zeros((n_samples, seq_len), dtype=x[0].dtype)
-        for samp_idx, sample in enumerate(x):
-            padded_x[samp_idx, : len(sample)] = sample
-        return padded_x
-
-    def mu_law_encode(x):
-        # See https://en.wikipedia.org/wiki/%CE%9C-law_algorithm
-        # [-2**15, 2**15 - 1] -> [0, 1]
-        x = (x.astype(np.float32) + 32_768) / 65_536
-        # [0, 1] -> [-1, 1]
-        x = 2 * x - 1
-        # [-1, 1] -> [-1, 1] (but squeezed)
-        x = np.sign(x) * np.log1p(255 * np.abs(x)) / np.log1p(255)
-        # [-1, 1] -> [0, 1]
-        x = (x + 1) / 2
-        # [0, 1] -> [0, 255]
-        x = 255 * x
-        x = x.astype(np.int32)
-        return x
-
-    def mu_law_decode(x):
-        # See https://en.wikipedia.org/wiki/%CE%9C-law_algorithm
-        # [0, 255] -> [0, 1]
-        x = x.astype(np.float32) / 255
-        x = np.clip(x, 0, 1)
-        # [0, 1] -> [-1, 1]
-        x = 2 * x - 1
-        # [-1, 1] (squeezed) -> [-1, 1]
-        x = np.sign(x) * ((1 + 255) ** np.abs(x) - 1) / 255
-        # [-1, 1] -> [0, 1]
-        x = (x + 1) / 2
-        # [0, 1] -> [-2**15, 2**15 - 1]
-        x = (x * 65_536 - 32_768).astype(np.int16)
-        return x
-
-    def maybe_cache_data():
-        if (base / "cache.npz").exists():
-            return
-
-        testing_list = base / "testing_list.txt"
-        validation_list = base / "validation_list.txt"
+    if not cache_file.exists():
+        testing_list = base_dir / "testing_list.txt"
+        validation_list = base_dir / "validation_list.txt"
         test_tracks = set(
             testing_list.read_text().splitlines()
             + validation_list.read_text().splitlines()
@@ -172,24 +187,21 @@ def load_sc09(H):
         train = []
         test = []
         H.logprint("Reading SC09 wav files...")
-        for track in base.glob("**/*.wav"):
+        for track in base_dir.glob("**/*.wav"):
             label = track.parent.name
 
             x = train
             if f"{label}/{track.name}" in test_tracks:
                 x = test
 
-            x.append(wav_to_np(str(track)))
+            x.append(wav_to_np(track))
 
-        train = mu_law_encode(pad(train)).astype(np.uint8)
-        test = mu_law_encode(pad(test)).astype(np.uint8)
+        train = mu_law_encode(pad(train, seq_len)).astype(np.uint8)
+        test = mu_law_encode(pad(test, seq_len)).astype(np.uint8)
 
-        np.savez(base / "cache.npz", train=train, test=test)
+        np.savez(cache_file, train=train, test=test)
 
-    maybe_download_data()
-    maybe_cache_data()
-
-    cache = np.load(base / "cache.npz")
+    cache = np.load(cache_file)
     # The cache is stored as uint8, but I don't want to deal with overflows
     train = cache["train"].astype(np.int16)
     test = cache["test"].astype(np.int16)
@@ -200,6 +212,116 @@ def load_sc09(H):
     assert train.dtype == test.dtype == np.int16
     assert train.shape == (31158, 16000, 1)
     assert test.shape == (7750, 16000, 1)
+
+    H = dataclasses.replace(
+        H,
+        data_seq_length=seq_len,
+        data_num_channels=1,
+        data_num_cats=num_cats,
+        data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+    )
+    return H, (train, test)
+
+
+def load_beethoven(H):
+    seq_len = 128_000
+    num_cats = 256
+    data_dir = Path(H.data_dir)
+    base_dir = data_dir / "beethoven"
+    zip_file = data_dir / "beethoven.zip"
+    cache_file = base_dir / "cache.npz"
+
+    maybe_download(
+        H,
+        "https://huggingface.co/datasets/krandiash/beethoven/resolve/main/beethoven.zip?download=true",
+        zip_file,
+    )
+    if not base_dir.exists():
+        unzip(H, zip_file, data_dir)
+
+    if not cache_file.exists():
+        H.logprint("Reading Beethoven wav files...")
+        train = []
+        for i in range(3808):
+            train.append(wav_to_np(base_dir / f"{i}.wav"))
+
+        test = []
+        # validation is [3808, 4067]
+        for i in range(3808, 4328):
+            test.append(wav_to_np(base_dir / f"{i}.wav"))
+
+        train = mu_law_encode(pad(train, seq_len)).astype(np.uint8)
+        test = mu_law_encode(pad(test, seq_len)).astype(np.uint8)
+
+        np.savez(cache_file, train=train, test=test)
+
+    cache = np.load(cache_file)
+    # The cache is stored as uint8, but I don't want to deal with overflows
+    train = cache["train"].astype(np.int16)
+    test = cache["test"].astype(np.int16)
+
+    # Add a dummy channel dim
+    train, test = np.expand_dims(train, -1), np.expand_dims(test, -1)
+
+    assert train.dtype == test.dtype == np.int16
+    assert train.shape == (3808, seq_len, 1)
+    assert test.shape == (520, seq_len, 1)
+
+    H = dataclasses.replace(
+        H,
+        data_seq_length=seq_len,
+        data_num_channels=1,
+        data_num_cats=num_cats,
+        data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+    )
+    return H, (train, test)
+
+
+def load_youtube_mix(H):
+    seq_len = 960_512
+    num_cats = 256
+    data_dir = Path(H.data_dir)
+    base_dir = data_dir / "youtube_mix"
+    zip_file = data_dir / "youtube_mix.zip"
+    cache_file = base_dir / "cache.npz"
+
+    maybe_download(
+        H,
+        "https://huggingface.co/datasets/krandiash/youtubemix/resolve/main/youtube_mix.zip?download=true",
+        zip_file,
+    )
+    if not base_dir.exists():
+        unzip(H, zip_file, data_dir)
+
+    if not cache_file.exists():
+        H.logprint("Reading Youtube Mix wav files...")
+        train = []
+        for i in range(212):
+            idx = str(i).zfill(3)
+            train.append(wav_to_np(base_dir / f"out{idx}.wav"))
+
+        test = []
+        # validation is [212, 225]
+        for i in range(212, 241):
+            idx = str(i).zfill(3)
+            test.append(wav_to_np(base_dir / f"out{idx}.wav"))
+
+        train = mu_law_encode(pad(train, seq_len)).astype(np.uint8)
+        test = mu_law_encode(pad(test, seq_len)).astype(np.uint8)
+
+        np.savez(cache_file, train=train, test=test)
+
+    cache = np.load(cache_file)
+    # The cache is stored as uint8, but I don't want to deal with overflows
+    train = cache["train"].astype(np.int16)
+    test = cache["test"].astype(np.int16)
+
+    # Add a dummy channel dim
+    train, test = np.expand_dims(train, -1), np.expand_dims(test, -1)
+
+    assert train.dtype == test.dtype == np.int16
+    assert train.shape == (212, seq_len, 1)
+    assert test.shape == (29, seq_len, 1)
 
     H = dataclasses.replace(
         H,
