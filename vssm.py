@@ -3,6 +3,7 @@ from functools import partial
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from einops import rearrange
 from jax import random
 
 from hps import Hyperparams
@@ -43,6 +44,30 @@ def loss_and_metrics(logits, kls, x):
     return loss, {"loss": loss, "log-like": ll, "kl-total": kl_total, **kls}
 
 
+class DownPool(nn.Module):
+    # TODO: add support for padding
+    H: Hyperparams
+
+    @nn.compact
+    def __call__(self, x):
+        batch_size, seq_len, dim = x.shape
+        x = rearrange(x, "...(l m) d -> ... l (d m)", m=self.H.pool_multiplier)
+        return nn.Dense(dim * self.H.pool_expand)(x)
+
+
+class UpPool(nn.Module):
+    # TODO: add support for padding
+    H: Hyperparams
+
+    @nn.compact
+    def __call__(self, x):
+        batch_size, seq_len, dim = x.shape
+        expand_ratio = int(self.H.pool_multiplier / self.H.pool_expand)
+        x = nn.Dense(dim * expand_ratio)(x)
+        x = rearrange(x, "... l (d m) -> ... (l m) d", m=self.H.pool_multiplier)
+        return x
+
+
 class DecoderBlock(nn.Module):
     H: Hyperparams
     n_layers: int
@@ -65,7 +90,9 @@ class DecoderBlock(nn.Module):
             residual=True,
         )
         self.z_proj = nn.Dense(self.H.rnn_out_size)
+        self.up_pool = UpPool(self.H)
 
+    @nn.compact
     def __call__(self, x, cond_enc, rng):
         q = jnp.split(
             self.q_block(jnp.concat([x, cond_enc], axis=-1)), 2, axis=-1
@@ -78,6 +105,7 @@ class DecoderBlock(nn.Module):
         kl = gaussian_kl(q, p)
 
         x = self.res_block(x + x_p + self.z_proj(z))
+        x = self.up_pool(x)
         return x, kl
 
     def sample_prior(self, x, rng):
@@ -85,7 +113,7 @@ class DecoderBlock(nn.Module):
             self.p_block(x), [self.H.zdim, self.H.zdim * 2], axis=-1
         )
         z = gaussian_sample(p, rng)
-        return self.res_block(x + x_p + self.z_proj(z))
+        return self.up_pool(self.res_block(x + x_p + self.z_proj(z)))
 
 
 class Decoder(nn.Module):
@@ -105,7 +133,7 @@ class Decoder(nn.Module):
         # TODO: consider if it is useful to store sampled latents as well
         kls = []
         x = jnp.broadcast_to(
-            self.x_bias, cond_enc[-1].shape[:-1] + (H.rnn_out_size,)
+            self.x_bias, cond_enc[0].shape[:-1] + (H.rnn_out_size,)
         )
         for block_id, (block, acts) in enumerate(zip(self.blocks, cond_enc)):
             rng, block_rng = random.split(rng)
@@ -120,7 +148,7 @@ class Decoder(nn.Module):
 
     def sample_prior(self, gen_len, n_samples, rng):
         x = jnp.broadcast_to(
-            self.x_bias, (n_samples, gen_len, self.H.rnn_out_size)
+            self.x_bias, (n_samples, 1, self.H.rnn_out_size)
         )
         for block in self.blocks:
             rng, block_rng = random.split(rng)
@@ -145,11 +173,13 @@ class Encoder(nn.Module):
             for depth in self.H.encoder_rnn_layers
         ]
 
+    @nn.compact
     def __call__(self, x):
         x = self.initial(self.H.data_preprocess_fn(x))
         acts = []
         for block in self.blocks:
             x = block(x)
+            x = DownPool(self.H)(x)
             acts.append(x)
         return list(reversed(acts))
 

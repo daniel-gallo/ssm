@@ -23,7 +23,12 @@ class Hyperparams:
     encoder_rnn_layers: tuple[int, ...] = (2, 2)
     decoder_rnn_layers: tuple[int, ...] = (2, 2)
 
-    zdim: int = 32
+    zdim: int = 16
+
+    # think of better names for those
+    pool_multiplier: int = 28
+    pool_expand: int = 1
+    pool_pad_value : int = 0
 
     rnn_init_minval: float = 0.4
     rnn_init_maxval: float = 0.99
@@ -47,7 +52,7 @@ class Hyperparams:
     mins_per_checkpoint: float = 30
     num_samples_per_eval: int = 8
 
-    num_epochs: int = 1
+    num_epochs: int = 30
     batch_size_eval: int = 128
 
     # Other useful meta-data, set automatically
