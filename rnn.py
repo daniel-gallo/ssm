@@ -86,7 +86,7 @@ class RGLRU(nn.Module):
         a_expit = expit(a_logit)
         if self.H.rnn_pos_embedding:
             x = jnp.concatenate(
-                [x, get_sinusoidal_embeddings(batch_size, seq_len, 16)], -1
+                [x, get_sinusoidal_embeddings(batch_size, seq_len, 16) / 10], -1
             )
         dx = nn.Dense(self.d_out)(x)
         x = nn.Dense(self.d_hidden)(x)
@@ -123,7 +123,7 @@ class RNNBlock(nn.Module):
     recurrent_block = RGLRU
 
     def setup(self):
-        self.forward = RNN(self.H, d_hidden=self.d_hidden, d_out=self.d_out)
+        self.forward = self.recurrent_block(self.H, d_hidden=self.d_hidden, d_out=self.d_out)
         if self.bidirectional:
             self.backward = self.recurrent_block(
                 self.H, d_hidden=self.d_hidden, d_out=self.d_out, reverse=True
