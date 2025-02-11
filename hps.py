@@ -23,18 +23,18 @@ class Hyperparams:
     encoder_rnn_layers: tuple[int, ...] = (2, 2)
     decoder_rnn_layers: tuple[int, ...] = (2, 2)
 
-    zdim: int = 16
+    zdim: int = 8
 
     # think of better names for those
     pool_multiplier: int = 28
-    pool_expand: int = 1
+    pool_expand: int = 2
     pool_pad_value : int = 0
 
     rnn_init_minval: float = 0.4
     rnn_init_maxval: float = 0.99
     rnn_norm_input: bool = True
-    rnn_hidden_size: int = 64
-    rnn_out_size: int = 32
+    rnn_hidden_size: int = 32
+    rnn_out_size: int = 16
     rnn_pos_embedding: bool = True
 
     dataset: str = "binarized-mnist"

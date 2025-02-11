@@ -118,19 +118,20 @@ class RNNBlock(nn.Module):
     H: Hyperparams
     d_out: int
     bidirectional: bool = False
+    expand_factor: int = 1
     residual: bool = False
     recurrent_block = RNN
 
     def setup(self):
         self.forward = self.recurrent_block(
             self.H,
-            d_hidden=self.H.rnn_hidden_size,
+            d_hidden=self.H.rnn_hidden_size * self.expand_factor,
             d_out=self.d_out,
         )
         if self.bidirectional:
             self.backward = self.recurrent_block(
                 self.H,
-                d_hidden=self.H.rnn_hidden_size,
+                d_hidden=self.H.rnn_hidden_size * self.expand_factor,
                 d_out=self.d_out,
                 reverse=True,
             )
@@ -147,6 +148,7 @@ class RNNBlocks(nn.Module):
     H: Hyperparams
     n_layers: int
     d_out: int
+    expand_factor: int = 1
     bidirectional: bool = False
     residual: bool = False
 
@@ -156,6 +158,7 @@ class RNNBlocks(nn.Module):
             RNNBlock(
                 self.H,
                 d_out=self.d_out,
+                expand_factor=self.expand_factor,
                 bidirectional=self.bidirectional,
                 residual=self.residual,
             )
