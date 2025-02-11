@@ -6,3 +6,5 @@ optax
 pytest
 einops
 pillow
+soundfile
+wandb

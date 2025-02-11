@@ -112,8 +112,8 @@ def wav_to_np(path: Path) -> np.ndarray:
         return np.frombuffer(signal, dtype=np.int16)
 
 
-def np_to_wav(x: np.ndarray, path: str):
-    with wave.open(path, "wb") as wav_file:
+def np_to_wav(x: np.ndarray, path: Path):
+    with wave.open(str(path), "wb") as wav_file:
         wav_file.setnchannels(1)
         wav_file.setsampwidth(2)
         wav_file.setframerate(16000)
@@ -337,6 +337,10 @@ def save_samples(H: Hyperparams, step, samples):
     match H.dataset:
         case "binarized-mnist":
             save_mnist_binarized(H, step, samples)
+        case "sc09" | "beethoven" | "youtube_mix":
+            save_audio(H, step, samples)
+        case _:
+            H.logprint(f"Dataset {H.dataset} does not support saving sampling")
 
 
 def save_mnist_binarized(H: Hyperparams, step, samples):
@@ -359,3 +363,26 @@ def save_mnist_binarized(H: Hyperparams, step, samples):
         import wandb
 
         wandb.log({"samples": wandb.Image(samples)}, step)
+
+
+def save_audio(H: Hyperparams, step, samples):
+    batch_size, seq_length, num_channels = samples.shape
+
+    sample_dir = Path(H.sample_dir) / H.id
+    sample_dir.mkdir(parents=True, exist_ok=True)
+
+    # One hot encoding -> [0, 255]
+    samples = jnp.argmax(samples, axis=-1)
+    # [0, 255] -> [-2**15, 2**15 - 1]
+    samples = mu_law_decode(samples)
+
+    sample_filenames = []
+    for sample_id, sample in enumerate(samples):
+        sample_path = sample_dir / f"step-{step}-audio-{sample_id}.wav"
+        np_to_wav(sample, sample_path)
+        sample_filenames.append(str(sample_path))
+
+    if H.enable_wandb:
+        import wandb
+
+        wandb.log({"samples": [wandb.Audio(f) for f in sample_filenames]}, step)
