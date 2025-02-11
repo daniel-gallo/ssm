@@ -77,9 +77,11 @@ class DecoderBlock(nn.Module):
         zdim = self.H.zdim * self.expand_factor
         rnn_out_size = self.H.rnn_out_size * self.expand_factor
 
-        blocks = partial(RNNBlocks, self.H, self.n_layers, expand_factor=self.expand_factor)
+        blocks = partial(
+            RNNBlocks, self.H, self.n_layers, expand_factor=self.expand_factor
+        )
         self.q_block = blocks(
-            d_out=zdim* 2,
+            d_out=zdim * 2,
             bidirectional=True,
             residual=False,
         )
@@ -104,9 +106,7 @@ class DecoderBlock(nn.Module):
         q = jnp.split(
             self.q_block(jnp.concat([x, cond_enc], axis=-1)), 2, axis=-1
         )
-        *p, x_p = jnp.split(
-            self.p_block(x), [zdim, zdim*2], axis=-1
-        )
+        *p, x_p = jnp.split(self.p_block(x), [zdim, zdim * 2], axis=-1)
 
         z = gaussian_sample(q, rng)
         kl = gaussian_kl(q, p)
@@ -118,9 +118,7 @@ class DecoderBlock(nn.Module):
     def sample_prior(self, x, rng):
         zdim = self.H.zdim * self.expand_factor
 
-        *p, x_p = jnp.split(
-            self.p_block(x), [zdim, zdim * 2], axis=-1
-        )
+        *p, x_p = jnp.split(self.p_block(x), [zdim, zdim * 2], axis=-1)
         z = gaussian_sample(p, rng)
         return self.up_pool(self.res_block(x + x_p + self.z_proj(z)))
 
@@ -131,16 +129,18 @@ class Decoder(nn.Module):
 
     def setup(self):
         H = self.H
-        self.init_dim = H.rnn_out_size * H.pool_expand ** len(H.decoder_rnn_layers)
-        expand_factors = reversed([H.pool_expand ** (i + 1) for i in range(len(H.decoder_rnn_layers))])
+        self.init_dim = H.rnn_out_size * H.pool_expand ** len(
+            H.decoder_rnn_layers
+        )
+        expand_factors = reversed(
+            [H.pool_expand ** (i + 1) for i in range(len(H.decoder_rnn_layers))]
+        )
 
         self.blocks = [
-            DecoderBlock(
-                H,
-                n_layers=depth,
-                expand_factor=expand_factor
+            DecoderBlock(H, n_layers=depth, expand_factor=expand_factor)
+            for depth, expand_factor in zip(
+                H.decoder_rnn_layers, expand_factors
             )
-            for depth, expand_factor in zip(H.decoder_rnn_layers, expand_factors)
         ]
         self.x_bias = self.param(
             "x_bias", nn.initializers.zeros, (self.init_dim,)
@@ -167,9 +167,7 @@ class Decoder(nn.Module):
 
     def sample_prior(self, gen_len, n_samples, rng):
         gen_len = gen_len // (self.H.pool_multiplier ** len(self.blocks))
-        x = jnp.broadcast_to(
-            self.x_bias, (n_samples, gen_len, self.init_dim)
-        )
+        x = jnp.broadcast_to(self.x_bias, (n_samples, gen_len, self.init_dim))
         for block in self.blocks:
             rng, block_rng = random.split(rng)
             x = block.sample_prior(x, block_rng)
@@ -181,7 +179,10 @@ class Encoder(nn.Module):
     H: Hyperparams
 
     def setup(self):
-        expand_factors = [self.H.pool_expand ** (i + 1) for i in range(len(self.H.encoder_rnn_layers))]
+        expand_factors = [
+            self.H.pool_expand ** (i + 1)
+            for i in range(len(self.H.encoder_rnn_layers))
+        ]
 
         self.initial = nn.Dense(self.H.rnn_out_size)
         self.blocks = [
@@ -193,7 +194,9 @@ class Encoder(nn.Module):
                 bidirectional=True,
                 residual=True,
             )
-            for depth, expand_factor in zip(self.H.encoder_rnn_layers, expand_factors)
+            for depth, expand_factor in zip(
+                self.H.encoder_rnn_layers, expand_factors
+            )
         ]
 
     @nn.compact

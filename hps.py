@@ -28,7 +28,7 @@ class Hyperparams:
     # think of better names for those
     pool_multiplier: int = 28
     pool_expand: int = 2
-    pool_pad_value : int = 0
+    pool_pad_value: int = 0
 
     rnn_init_minval: float = 0.4
     rnn_init_maxval: float = 0.99
