@@ -20,8 +20,8 @@ class Hyperparams:
     checkpoint_dir: str = "checkpoints"
     sample_dir: str = "samples"
 
-    encoder_rnn_layers: tuple[int, ...] = (2, 2)
-    decoder_rnn_layers: tuple[int, ...] = (2, 2)
+    encoder_rnn_layers: int = 4
+    decoder_rnn_layers: int = 4
 
     zdim: int = 32
 

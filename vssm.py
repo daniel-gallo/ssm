@@ -3,10 +3,11 @@ from functools import partial
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import random
 
 from hps import Hyperparams
-from rnn import RNNBlocks
+from rnn import RNNBlock, lecun_normal
 
 
 def gaussian_kl(q, p):
@@ -48,23 +49,28 @@ class DecoderBlock(nn.Module):
     n_layers: int
 
     def setup(self):
-        blocks = partial(RNNBlocks, self.H, self.n_layers)
-        self.q_block = blocks(
+        block = partial(RNNBlock, self.H)
+        self.q_block = block(
             d_out=self.H.zdim * 2,
             bidirectional=True,
             residual=False,
+            last_scale=.1,
         )
-        self.p_block = blocks(
+        self.p_block = block(
             d_out=self.H.zdim * 2 + self.H.rnn_out_size,
             bidirectional=False,
             residual=False,
+            last_scale=0.0,
         )
-        self.res_block = blocks(
+        self.res_block = block(
             d_out=self.H.rnn_out_size,
             bidirectional=False,
             residual=True,
+            last_scale=1.,
         )
-        self.z_proj = nn.Dense(self.H.rnn_out_size)
+        self.z_proj = nn.Dense(
+            self.H.rnn_out_size,
+        )
 
     def __call__(self, x, cond_enc, rng):
         q = jnp.split(
@@ -94,7 +100,10 @@ class Decoder(nn.Module):
 
     def setup(self):
         H = self.H
-        self.blocks = [DecoderBlock(H, depth) for depth in H.decoder_rnn_layers]
+        self.blocks = [
+            DecoderBlock(H, H.decoder_rnn_layers)
+            for _ in range(H.decoder_rnn_layers)
+        ]
         self.x_bias = self.param(
             "x_bias", nn.initializers.zeros, (H.rnn_out_size,)
         )
@@ -135,14 +144,13 @@ class Encoder(nn.Module):
     def setup(self):
         self.initial = nn.Dense(self.H.rnn_out_size)
         self.blocks = [
-            RNNBlocks(
+            RNNBlock(
                 H=self.H,
-                n_layers=depth,
                 d_out=self.H.rnn_out_size,
                 bidirectional=True,
                 residual=True,
             )
-            for depth in self.H.encoder_rnn_layers
+            for _ in range(self.H.encoder_rnn_layers)
         ]
 
     def __call__(self, x):

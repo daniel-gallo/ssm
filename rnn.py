@@ -69,6 +69,7 @@ class RNNBlock(nn.Module):
     d_out: int
     bidirectional: bool = False
     residual: bool = False
+    last_scale: float = 1.0
 
     def setup(self):
         self.forward = RNN(
@@ -83,41 +84,31 @@ class RNNBlock(nn.Module):
                 d_out=self.d_out,
                 reverse=True,
             )
+        self.dense1 = nn.Dense(self.d_out)
+        self.dense2 = nn.Dense(self.d_out)
+        self.dense3 = nn.Dense(
+            self.d_out, kernel_init=lecun_normal(self.last_scale)
+        )
+        self.ln1 = nn.LayerNorm()
+        self.ln2 = nn.LayerNorm()
 
     def __call__(self, x):
+        x = self.ln1(x)
         identity = x
+
         x = nn.gelu(x)
         x_fwd = self.forward(x)
         x = (x_fwd + self.backward(x)) / 2 if self.bidirectional else x_fwd
-        return (x + identity) / 2 if self.residual else x
-
-
-class RNNBlocks(nn.Module):
-    H: Hyperparams
-    n_layers: int
-    d_out: int
-    bidirectional: bool = False
-    residual: bool = False
-
-    def setup(self):
-        self.initial = nn.Dense(self.d_out)
-        self.blocks = [
-            RNNBlock(
-                self.H,
-                d_out=self.d_out,
-                bidirectional=self.bidirectional,
-                residual=self.residual,
-            )
-            for _ in range(self.n_layers)
-        ]
-        self.final = nn.Dense(
-            self.d_out, kernel_init=lecun_normal(1 / self.n_layers)
-        )
-
-    def __call__(self, x):
         x = nn.gelu(x)
-        x = self.initial(x)
-        for b in self.blocks:
-            x = b(x)
+        x = self.dense1(x)
+
+        x = identity = x + identity if self.residual else x
+
+        x = self.ln2(x)
+        x = self.dense2(x)
         x = nn.gelu(x)
-        return self.final(x)
+        x = self.dense3(x)
+
+        x = x + identity if self.residual else x
+
+        return x
