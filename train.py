@@ -13,6 +13,7 @@ from flax.training import checkpoints
 from jax import random, tree_util
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
+from jax.tree_util import tree_leaves
 from jax.util import safe_map
 
 from data import load_data, save_samples
@@ -78,6 +79,9 @@ def load_train_state(H: Hyperparams):
         jnp.zeros((H.batch_size,) + H.data_shape, "int32"),
         random.PRNGKey(0),
     )
+    num_parameters = sum(leaf.size for leaf in tree_leaves(weights))
+    H.logprint(f"Number of parameters: {num_parameters}")
+
     optimizer_state = H.optimizer.init(weights)
     S = TrainState(weights, optimizer_state, 0, rng_train)
 
