@@ -111,7 +111,7 @@ class RGLRU(nn.Module):
         a_squared = rearrange(a_squared, "batch seq chan -> seq batch chan")
         _, h = jax.lax.scan(f, init, (x, a, a_squared), reverse=self.reverse)
         h = rearrange(h, "seq batch chan -> batch seq chan")
-        return (dx + nn.Dense(self.d_out)(h)) / 2
+        return dx + nn.Dense(self.d_out)(h)
 
 
 class RNNBlock(nn.Module):
@@ -135,31 +135,16 @@ class RNNBlock(nn.Module):
                 d_out=self.d_out,
                 reverse=True,
             )
-        self.dense1 = nn.Dense(self.d_out)
-        self.dense2 = nn.Dense(self.d_out)
-        self.dense3 = nn.Dense(
-            self.d_out, kernel_init=lecun_normal(self.last_scale)
-        )
-        self.ln1 = nn.LayerNorm()
-        self.ln2 = nn.LayerNorm()
+        self.last_dense = nn.Dense(self.d_out)
 
     def __call__(self, x):
-        x = self.ln1(x)
         identity = x
-
         x = nn.gelu(x)
         x_fwd = self.forward(x)
         x = (x_fwd + self.backward(x)) / 2 if self.bidirectional else x_fwd
-        x = nn.gelu(x)
-        x = self.dense1(x)
-
-        x = identity = x + identity if self.residual else x
-
-        x = self.ln2(x)
-        x = self.dense2(x)
-        x = nn.gelu(x)
-        x = self.dense3(x)
-
         x = x + identity if self.residual else x
 
-        return x
+        x = nn.gelu(x)
+        x = self.last_dense(x)
+        x = x + identity if self.residual else x
+        return self.last_scale * x
