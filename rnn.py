@@ -64,21 +64,72 @@ class RNN(nn.Module):
         return (dx + nn.Dense(self.d_out)(h)) / 2
 
 
+class RGLRU(nn.Module):
+    H: Hyperparams
+    d_hidden: int
+    d_out: int
+    reverse: bool = False
+
+    @nn.compact
+    def __call__(self, x):
+        # TODO: implement BlockDiagonalLinear from RecurrentGemma
+        batch_size, seq_len, _ = x.shape
+
+        def stable_init(rng, shape):
+            r_min, r_max = self.H.rnn_init_minval, self.H.rnn_init_maxval
+            u = jax.random.uniform(
+                key=rng, shape=shape, minval=r_min, maxval=r_max
+            )
+            return logit(u)
+
+        a_logit = self.param("a_logit", stable_init, (self.d_hidden,))
+        a_expit = expit(a_logit)
+        if self.H.rnn_pos_embedding:
+            x = jnp.concatenate(
+                [x, get_sinusoidal_embeddings(batch_size, seq_len, 16) / 10], -1
+            )
+        dx = nn.Dense(self.d_out)(x)
+        x = nn.Dense(self.d_hidden)(x)
+        if self.H.rnn_norm_input:
+            x = jnp.sqrt(1 - a_expit**2) * x
+        gate_x = nn.sigmoid(nn.Dense(self.d_hidden)(x))
+        gate_a = nn.sigmoid(nn.Dense(self.d_hidden)(x))
+
+        a = gate_a * a_expit
+        a_squared = a**2
+
+        x = gate_x * x
+
+        def f(h, x):
+            x, a, a_squared = x
+            h = a * h + (1 - a_squared) ** 0.5 * x
+            return h, h
+
+        init = jnp.zeros((batch_size, self.d_hidden))
+        x = rearrange(x, "batch seq chan -> seq batch chan")
+        a = rearrange(a, "batch seq chan -> seq batch chan")
+        a_squared = rearrange(a_squared, "batch seq chan -> seq batch chan")
+        _, h = jax.lax.scan(f, init, (x, a, a_squared), reverse=self.reverse)
+        h = rearrange(h, "seq batch chan -> batch seq chan")
+        return (dx + nn.Dense(self.d_out)(h)) / 2
+
+
 class RNNBlock(nn.Module):
     H: Hyperparams
     d_out: int
     bidirectional: bool = False
     residual: bool = False
     last_scale: float = 1.0
+    recurrent_block = RNN
 
     def setup(self):
-        self.forward = RNN(
+        self.forward = self.recurrent_block(
             self.H,
             d_hidden=self.H.rnn_hidden_size,
             d_out=self.d_out,
         )
         if self.bidirectional:
-            self.backward = RNN(
+            self.backward = self.recurrent_block(
                 self.H,
                 d_hidden=self.H.rnn_hidden_size,
                 d_out=self.d_out,
