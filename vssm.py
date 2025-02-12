@@ -3,11 +3,12 @@ from functools import partial
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import numpy as np
 from einops import rearrange
 from jax import random
 
 from hps import Hyperparams
-from rnn import RNNBlocks
+from rnn import RNNBlock, lecun_normal
 
 
 def gaussian_kl(q, p):
@@ -51,8 +52,8 @@ class DownPool(nn.Module):
     @nn.compact
     def __call__(self, x):
         batch_size, seq_len, dim = x.shape
-        x = rearrange(x, "...(l m) d -> ... l (d m)", m=self.H.pool_multiplier)
-        return nn.Dense(dim * self.H.pool_expand)(x)
+        x = rearrange(x, "...(l m) d -> ... l (d m)", m=self.H.pool_scale)
+        return nn.Dense(dim * self.H.pool_features)(x)
 
 
 class UpPool(nn.Module):
@@ -62,46 +63,49 @@ class UpPool(nn.Module):
     @nn.compact
     def __call__(self, x):
         batch_size, seq_len, dim = x.shape
-        expand_ratio = int(self.H.pool_multiplier / self.H.pool_expand)
-        x = nn.Dense(dim * expand_ratio)(x)
-        x = rearrange(x, "... l (d m) -> ... (l m) d", m=self.H.pool_multiplier)
+        assert (dim * self.H.pool_scale) % self.H.pool_features == 0
+        x = nn.Dense((dim * self.H.pool_scale) // self.H.pool_features)(x)
+        x = rearrange(x, "... l (d m) -> ... (l m) d", m=self.H.pool_scale)
         return x
 
 
 class DecoderBlock(nn.Module):
+    # TODO: also adapt the rnn hidden size according to location
     H: Hyperparams
     n_layers: int
-    expand_factor: int = 1
+    up_pool: bool = False
+    location: int = 0
 
     def setup(self):
-        zdim = self.H.zdim * self.expand_factor
-        rnn_out_size = self.H.rnn_out_size * self.expand_factor
-
-        blocks = partial(
-            RNNBlocks, self.H, self.n_layers, expand_factor=self.expand_factor
-        )
-        self.q_block = blocks(
+        zdim = self.H.zdim * (self.H.pool_features**self.location)
+        out_size = self.H.rnn_out_size * (self.H.pool_features**self.location)
+        block = partial(RNNBlock, self.H)
+        self.q_block = block(
             d_out=zdim * 2,
             bidirectional=True,
             residual=False,
+            last_scale=0.1,
         )
-        self.p_block = blocks(
-            d_out=zdim * 2 + rnn_out_size,
+        self.p_block = block(
+            d_out=zdim * 2 + out_size,
             bidirectional=False,
             residual=False,
+            last_scale=0.0,
         )
-        self.res_block = blocks(
-            d_out=rnn_out_size,
+        self.res_block = block(
+            d_out=out_size,
             bidirectional=False,
             residual=True,
+            last_scale=1.0 / np.sqrt(self.n_layers),
         )
-        self.z_proj = nn.Dense(rnn_out_size)
-        self.up_pool = UpPool(self.H)
+        self.z_proj = nn.Dense(
+            out_size, kernel_init=lecun_normal(1 / np.sqrt(self.n_layers))
+        )
+        if self.up_pool:
+            self.up_pool_ = UpPool(self.H)
 
-    @nn.compact
     def __call__(self, x, cond_enc, rng):
-        # TODO: consider different location of up-pool in the decoder block
-        zdim = self.H.zdim * self.expand_factor
+        zdim = self.H.zdim * (self.H.pool_features**self.location)
 
         q = jnp.split(
             self.q_block(jnp.concat([x, cond_enc], axis=-1)), 2, axis=-1
@@ -112,36 +116,63 @@ class DecoderBlock(nn.Module):
         kl = gaussian_kl(q, p)
 
         x = self.res_block(x + x_p + self.z_proj(z))
-        x = self.up_pool(x)
+        if self.up_pool:
+            x = self.up_pool_(x)
         return x, kl
 
     def sample_prior(self, x, rng):
-        zdim = self.H.zdim * self.expand_factor
+        zdim = self.H.zdim * (self.H.pool_features**self.location)
 
         *p, x_p = jnp.split(self.p_block(x), [zdim, zdim * 2], axis=-1)
         z = gaussian_sample(p, rng)
-        return self.up_pool(self.res_block(x + x_p + self.z_proj(z)))
+        x = self.res_block(x + x_p + self.z_proj(z))
+        if self.up_pool:
+            x = self.up_pool_(x)
+        return x
 
 
 class Decoder(nn.Module):
-    # TODO: consider models with diff. number of latent variables per block
     H: Hyperparams
 
     def setup(self):
         H = self.H
-        self.init_dim = H.rnn_out_size * H.pool_expand ** len(
-            H.decoder_rnn_layers
-        )
-        expand_factors = reversed(
-            [H.pool_expand ** (i + 1) for i in range(len(H.decoder_rnn_layers))]
-        )
-
-        self.blocks = [
-            DecoderBlock(H, n_layers=depth, expand_factor=expand_factor)
-            for depth, expand_factor in zip(
-                H.decoder_rnn_layers, expand_factors
+        blocks = []
+        location = len(H.decoder_rnn_layers) - 1
+        total_layers = sum(H.decoder_rnn_layers)
+        for d in H.decoder_rnn_layers[:-1]:
+            for _ in range(d - 1):
+                blocks.append(
+                    DecoderBlock(
+                        H=H,
+                        n_layers=total_layers,
+                        up_pool=False,
+                        location=location,
+                    )
+                )
+            blocks.append(
+                DecoderBlock(
+                    H=H,
+                    n_layers=total_layers,
+                    up_pool=True,
+                    location=location,
+                )
             )
-        ]
+            location = location - 1
+        assert location == 0
+        for _ in range(H.decoder_rnn_layers[-1]):
+            blocks.append(
+                DecoderBlock(
+                    H=H,
+                    n_layers=total_layers,
+                    up_pool=False,
+                    location=location,
+                )
+            )
+
+        self.blocks = blocks
+        self.init_dim = H.rnn_out_size * H.pool_features ** (
+            len(H.decoder_rnn_layers) - 1
+        )
         self.x_bias = self.param(
             "x_bias", nn.initializers.zeros, (self.init_dim,)
         )
@@ -154,6 +185,11 @@ class Decoder(nn.Module):
         x = jnp.broadcast_to(
             self.x_bias, cond_enc[0].shape[:-1] + (self.init_dim,)
         )
+        cond_enc = [
+            c
+            for d, c in zip(self.H.decoder_rnn_layers, cond_enc)
+            for _ in range(d)
+        ]
         for block_id, (block, acts) in enumerate(zip(self.blocks, cond_enc)):
             rng, block_rng = random.split(rng)
             x, kl = block(x, acts, block_rng)
@@ -166,8 +202,10 @@ class Decoder(nn.Module):
         return x, kls
 
     def sample_prior(self, gen_len, n_samples, rng):
-        gen_len = gen_len // (self.H.pool_multiplier ** len(self.blocks))
-        x = jnp.broadcast_to(self.x_bias, (n_samples, gen_len, self.init_dim))
+        init_len = gen_len // (
+            self.H.pool_scale ** (len(self.H.decoder_rnn_layers) - 1)
+        )
+        x = jnp.broadcast_to(self.x_bias, (n_samples, init_len, self.init_dim))
         for block in self.blocks:
             rng, block_rng = random.split(rng)
             x = block.sample_prior(x, block_rng)
@@ -178,35 +216,34 @@ class Decoder(nn.Module):
 class Encoder(nn.Module):
     H: Hyperparams
 
-    def setup(self):
-        expand_factors = [
-            self.H.pool_expand ** (i + 1)
-            for i in range(len(self.H.encoder_rnn_layers))
-        ]
-
-        self.initial = nn.Dense(self.H.rnn_out_size)
-        self.blocks = [
-            RNNBlocks(
-                H=self.H,
-                n_layers=depth,
-                d_out=self.H.rnn_out_size * expand_factor,
-                expand_factor=expand_factor,
-                bidirectional=True,
-                residual=True,
-            )
-            for depth, expand_factor in zip(
-                self.H.encoder_rnn_layers, expand_factors
-            )
-        ]
-
     @nn.compact
     def __call__(self, x):
-        x = self.initial(self.H.data_preprocess_fn(x))
+        # TODO: also expand the rnn hidden size
+        H = self.H
+        x = nn.Dense(self.H.rnn_out_size)(H.data_preprocess_fn(x))
         acts = []
-        for block in self.blocks:
-            x = block(x)
-            x = DownPool(self.H)(x)
+        features = H.rnn_out_size
+        for d in H.encoder_rnn_layers[:-1]:
+            for _ in range(d):
+                x = RNNBlock(
+                    H=H,
+                    d_out=features,
+                    bidirectional=True,
+                    residual=True,
+                    last_scale=1.0,
+                )(x)
             acts.append(x)
+            features = features * H.pool_features
+            x = DownPool(H)(x)
+        for _ in range(H.encoder_rnn_layers[-1]):
+            x = RNNBlock(
+                H=H,
+                d_out=features,
+                bidirectional=True,
+                residual=True,
+                last_scale=1.0,
+            )(x)
+        acts.append(x)
         return list(reversed(acts))
 
 

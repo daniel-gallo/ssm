@@ -25,9 +25,8 @@ class Hyperparams:
 
     zdim: int = 8
 
-    # think of better names for those
-    pool_multiplier: int = 28
-    pool_expand: int = 2
+    pool_scale: int = 28
+    pool_features: int = 2
     pool_pad_value: int = 0
 
     rnn_init_minval: float = 0.4

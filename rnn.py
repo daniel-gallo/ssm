@@ -111,67 +111,40 @@ class RGLRU(nn.Module):
         a_squared = rearrange(a_squared, "batch seq chan -> seq batch chan")
         _, h = jax.lax.scan(f, init, (x, a, a_squared), reverse=self.reverse)
         h = rearrange(h, "seq batch chan -> batch seq chan")
-        return (dx + nn.Dense(self.d_out)(h)) / 2
+        return dx + nn.Dense(self.d_out)(h)
 
 
 class RNNBlock(nn.Module):
     H: Hyperparams
     d_out: int
     bidirectional: bool = False
-    expand_factor: int = 1
     residual: bool = False
+    last_scale: float = 1.0
     recurrent_block = RNN
 
     def setup(self):
         self.forward = self.recurrent_block(
             self.H,
-            d_hidden=self.H.rnn_hidden_size * self.expand_factor,
+            d_hidden=self.H.rnn_hidden_size,
             d_out=self.d_out,
         )
         if self.bidirectional:
             self.backward = self.recurrent_block(
                 self.H,
-                d_hidden=self.H.rnn_hidden_size * self.expand_factor,
+                d_hidden=self.H.rnn_hidden_size,
                 d_out=self.d_out,
                 reverse=True,
             )
+        self.last_dense = nn.Dense(self.d_out)
 
     def __call__(self, x):
         identity = x
         x = nn.gelu(x)
         x_fwd = self.forward(x)
         x = (x_fwd + self.backward(x)) / 2 if self.bidirectional else x_fwd
-        return (x + identity) / 2 if self.residual else x
+        x = x + identity if self.residual else x
 
-
-class RNNBlocks(nn.Module):
-    H: Hyperparams
-    n_layers: int
-    d_out: int
-    expand_factor: int = 1
-    bidirectional: bool = False
-    residual: bool = False
-
-    def setup(self):
-        self.initial = nn.Dense(self.d_out)
-        self.blocks = [
-            RNNBlock(
-                self.H,
-                d_out=self.d_out,
-                expand_factor=self.expand_factor,
-                bidirectional=self.bidirectional,
-                residual=self.residual,
-            )
-            for _ in range(self.n_layers)
-        ]
-        self.final = nn.Dense(
-            self.d_out, kernel_init=lecun_normal(1 / self.n_layers)
-        )
-
-    def __call__(self, x):
         x = nn.gelu(x)
-        x = self.initial(x)
-        for b in self.blocks:
-            x = b(x)
-        x = nn.gelu(x)
-        return self.final(x)
+        x = self.last_dense(x)
+        x = x + identity if self.residual else x
+        return self.last_scale * x
