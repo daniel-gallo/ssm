@@ -84,7 +84,7 @@ class DecoderBlock(nn.Module):
             d_out=zdim * 2,
             bidirectional=True,
             residual=False,
-            last_scale=.1,
+            last_scale=0.1,
         )
         self.p_block = block(
             d_out=zdim * 2 + out_size,
@@ -96,10 +96,10 @@ class DecoderBlock(nn.Module):
             d_out=out_size,
             bidirectional=False,
             residual=True,
-            last_scale=1. / np.sqrt(self.n_layers),
+            last_scale=1.0 / np.sqrt(self.n_layers),
         )
         self.z_proj = nn.Dense(
-            out_size, kernel_init=lecun_normal(1 / np.sqrt(self.n_layers)
+            out_size, kernel_init=lecun_normal(1 / np.sqrt(self.n_layers))
         )
         if self.up_pool:
             self.up_pool_ = UpPool(self.H)
@@ -141,29 +141,38 @@ class Decoder(nn.Module):
         total_layers = sum(H.decoder_rnn_layers)
         for d in H.decoder_rnn_layers[:-1]:
             for _ in range(d - 1):
-                blocks.append(DecoderBlock(
+                blocks.append(
+                    DecoderBlock(
+                        H=H,
+                        n_layers=total_layers,
+                        up_pool=False,
+                        location=location,
+                    )
+                )
+            blocks.append(
+                DecoderBlock(
+                    H=H,
+                    n_layers=total_layers,
+                    up_pool=True,
+                    location=location,
+                )
+            )
+            location = location - 1
+        assert location == 0
+        for _ in range(H.decoder_rnn_layers[-1]):
+            blocks.append(
+                DecoderBlock(
                     H=H,
                     n_layers=total_layers,
                     up_pool=False,
                     location=location,
-                ))
-            blocks.append(DecoderBlock(
-                H=H, n_layers=total_layers, up_pool=True, location=location,
-            ))
-            location = location - 1
-        assert location == 0
-        for _ in range(H.decoder_rnn_layers[-1]):
-            blocks.append(DecoderBlock(
-                H=H,
-                n_layers=total_layers,
-                up_pool=False,
-                location=location,
-            ))
+                )
+            )
 
         self.blocks = blocks
-        self.init_dim = H.rnn_out_size * H.pool_features ** (len(
-            H.decoder_rnn_layers
-        ) - 1)
+        self.init_dim = H.rnn_out_size * H.pool_features ** (
+            len(H.decoder_rnn_layers) - 1
+        )
         self.x_bias = self.param(
             "x_bias", nn.initializers.zeros, (self.init_dim,)
         )
@@ -193,8 +202,9 @@ class Decoder(nn.Module):
         return x, kls
 
     def sample_prior(self, gen_len, n_samples, rng):
-        init_len = gen_len // (self.H.pool_scale **
-                               (len(self.H.decoder_rnn_layers) - 1))
+        init_len = gen_len // (
+            self.H.pool_scale ** (len(self.H.decoder_rnn_layers) - 1)
+        )
         x = jnp.broadcast_to(self.x_bias, (n_samples, init_len, self.init_dim))
         for block in self.blocks:
             rng, block_rng = random.split(rng)
@@ -213,7 +223,6 @@ class Encoder(nn.Module):
         x = nn.Dense(self.H.rnn_out_size)(H.data_preprocess_fn(x))
         acts = []
         features = H.rnn_out_size
-        total_layers = sum(H.encoder_rnn_layers)
         for d in H.encoder_rnn_layers[:-1]:
             for _ in range(d):
                 x = RNNBlock(
@@ -221,7 +230,7 @@ class Encoder(nn.Module):
                     d_out=features,
                     bidirectional=True,
                     residual=True,
-                    last_scale=1.,
+                    last_scale=1.0,
                 )(x)
             acts.append(x)
             features = features * H.pool_features
@@ -232,7 +241,7 @@ class Encoder(nn.Module):
                 d_out=features,
                 bidirectional=True,
                 residual=True,
-                last_scale=1.,
+                last_scale=1.0,
             )(x)
         acts.append(x)
         return list(reversed(acts))
