@@ -90,7 +90,7 @@ class DecoderBlock(nn.Module):
             d_out=zdim * 2 + out_size,
             bidirectional=False,
             residual=False,
-            last_scale=0.0,
+            last_scale=0.1,
         )
         self.res_block = block(
             d_out=out_size,
