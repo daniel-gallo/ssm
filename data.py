@@ -213,6 +213,8 @@ def load_sc09(H):
     assert train.shape == (31158, 16000, 1)
     assert test.shape == (7750, 16000, 1)
 
+    np.random.RandomState(H.seed).shuffle(train)
+
     H = dataclasses.replace(
         H,
         data_seq_length=seq_len,
