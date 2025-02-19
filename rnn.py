@@ -1,10 +1,38 @@
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from einops import rearrange
 from jax.scipy.special import expit, logit
 
+from efficient_scan import common, pallas, scan
 from hps import Hyperparams
+
+# TODO: probably should be passed in train.py
+_mesh = jax.make_mesh((jax.device_count(),), ("batch",))
+SHARDING_SPEC = pallas.ShardingSpec(mesh=_mesh)
+
+
+def get_recurrent_block(H):
+    match H.rnn_block.lower():
+        case "rnn":
+            return RNN
+        case "rglru":
+            return RGLRU
+        case _:
+            raise ValueError(f"Unknown reccurent block type: {H.rnn_block}")
+
+
+def get_scan_implementation(H):
+    match H.scan_implementation.lower():
+        case "linear_native":
+            return common.ScanType.LINEAR_NATIVE
+        case "linear_pallas":
+            return common.ScanType.LINEAR_PALLAS
+        case "associative_native":
+            return common.ScanType.ASSOCIATIVE_NATIVE
+        case _:
+            raise ValueError(
+                f"Unknown scan implementation: {H.scan_implementation}"
+            )
 
 
 # Want to be able to vary the scale of initialized parameters
@@ -44,23 +72,23 @@ class RNN(nn.Module):
         a_logit = self.param("a_logit", stable_init, (self.d_hidden,))
         a = expit(a_logit)
 
-        def f(h, x):
-            h = a * h + x
-            return h, h
-
         if self.H.rnn_pos_embedding:
             x = jnp.concatenate(
                 [x, get_sinusoidal_embeddings(batch_size, seq_len, 16)], -1
             )
         dx = nn.Dense(self.d_out)(x)
-        init = jnp.zeros((batch_size, self.d_hidden))
         x = nn.Dense(self.d_hidden)(x)
         if self.H.rnn_norm_input:
             x = jnp.sqrt(1 - a**2) * x
-        # scan assumes the sequence axis is the first one
-        x = rearrange(x, "batch seq chan -> seq batch chan")
-        _, h = jax.lax.scan(f, init, x, reverse=self.reverse)
-        h = rearrange(h, "seq batch chan -> batch seq chan")
+        a = jnp.broadcast_to(a, x.shape)
+        h, _ = scan.linear_scan(
+            x=x,
+            a=a,
+            reverse=self.reverse,
+            scan_type=get_scan_implementation(self.H),
+            sharding_spec=SHARDING_SPEC,
+            unroll=128,
+        )
         return (dx + nn.Dense(self.d_out)(h)) / 2
 
 
@@ -86,7 +114,7 @@ class RGLRU(nn.Module):
         a_expit = expit(a_logit)
         if self.H.rnn_pos_embedding:
             x = jnp.concatenate(
-                [x, get_sinusoidal_embeddings(batch_size, seq_len, 16) / 10], -1
+                [x, get_sinusoidal_embeddings(batch_size, seq_len, 16)], -1
             )
         dx = nn.Dense(self.d_out)(x)
         x = nn.Dense(self.d_hidden)(x)
@@ -99,19 +127,17 @@ class RGLRU(nn.Module):
         a_squared = a**2
 
         x = gate_x * x
+        x = (1 - a_squared) ** 0.5 * x
 
-        def f(h, x):
-            x, a, a_squared = x
-            h = a * h + (1 - a_squared) ** 0.5 * x
-            return h, h
-
-        init = jnp.zeros((batch_size, self.d_hidden))
-        x = rearrange(x, "batch seq chan -> seq batch chan")
-        a = rearrange(a, "batch seq chan -> seq batch chan")
-        a_squared = rearrange(a_squared, "batch seq chan -> seq batch chan")
-        _, h = jax.lax.scan(f, init, (x, a, a_squared), reverse=self.reverse)
-        h = rearrange(h, "seq batch chan -> batch seq chan")
-        return dx + nn.Dense(self.d_out)(h)
+        h, _ = scan.linear_scan(
+            x=x,
+            a=a,
+            reverse=self.reverse,
+            scan_type=get_scan_implementation(self.H),
+            sharding_spec=SHARDING_SPEC,
+            unroll=128,
+        )
+        return (dx + nn.Dense(self.d_out)(h)) / 2
 
 
 class RNNBlock(nn.Module):
@@ -120,16 +146,16 @@ class RNNBlock(nn.Module):
     bidirectional: bool = False
     residual: bool = False
     last_scale: float = 1.0
-    recurrent_block = RNN
 
     def setup(self):
-        self.forward = self.recurrent_block(
+        recurrent_block = get_recurrent_block(self.H)
+        self.forward = recurrent_block(
             self.H,
             d_hidden=self.H.rnn_hidden_size,
             d_out=self.d_out,
         )
         if self.bidirectional:
-            self.backward = self.recurrent_block(
+            self.backward = recurrent_block(
                 self.H,
                 d_hidden=self.H.rnn_hidden_size,
                 d_out=self.d_out,

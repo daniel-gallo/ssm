@@ -27,14 +27,16 @@ class Hyperparams:
 
     pool_scale: int = 28
     pool_features: int = 2
-    pool_pad_value: int = 0
 
     rnn_init_minval: float = 0.4
     rnn_init_maxval: float = 0.99
     rnn_norm_input: bool = True
-    rnn_hidden_size: int = 32
+    rnn_hidden_size: int = 128
     rnn_out_size: int = 16
     rnn_pos_embedding: bool = True
+    rnn_block: str = "rnn"
+
+    scan_implementation: str = "linear_pallas"
 
     dataset: str = "binarized-mnist"
     seed: int = 0
@@ -42,7 +44,7 @@ class Hyperparams:
     learning_rate: float = 1e-3
     grad_clip: float = 200
     skip_threshold: float = 1000
-    shuffle_before_epoch: bool = False
+    shuffle_before_epoch: bool = True
 
     enable_wandb: bool = False
 
@@ -104,12 +106,16 @@ class Hyperparams:
                     self.encoder_rnn_layers,
                     self.decoder_rnn_layers,
                     self.zdim,
+                    self.pool_scale,
+                    self.pool_features,
                     self.rnn_init_minval,
                     self.rnn_init_maxval,
                     self.rnn_norm_input,
                     self.rnn_hidden_size,
                     self.rnn_out_size,
                     self.rnn_pos_embedding,
+                    self.rnn_block,
+                    self.scan_implementation,
                 )
             ).encode("utf-8")
         )
