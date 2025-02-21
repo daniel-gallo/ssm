@@ -1,4 +1,5 @@
 from functools import partial
+from typing_extensions import Union
 
 import flax.linen as nn
 import jax
@@ -48,24 +49,32 @@ def loss_and_metrics(logits, kls, x):
 class DownPool(nn.Module):
     # TODO: add support for padding
     H: Hyperparams
+    pool_scale: Union[int, None] = None
+    pool_features: Union[int, None] = None
 
     @nn.compact
     def __call__(self, x):
         batch_size, seq_len, dim = x.shape
-        x = rearrange(x, "...(l m) d -> ... l (d m)", m=self.H.pool_scale)
-        return nn.Dense(dim * self.H.pool_features)(x)
+        pool_scale = self.pool_scale or self.H.pool_scale
+        pool_features = self.pool_features or self.H.pool_features
+        x = rearrange(x, "...(l m) d -> ... l (d m)", m=pool_scale)
+        return nn.Dense(dim * pool_features)(x)
 
 
 class UpPool(nn.Module):
     # TODO: add support for padding
     H: Hyperparams
+    pool_scale: Union[int, None] = None
+    pool_features: Union[int, None] = None
 
     @nn.compact
     def __call__(self, x):
         batch_size, seq_len, dim = x.shape
-        assert (dim * self.H.pool_scale) % self.H.pool_features == 0
-        x = nn.Dense((dim * self.H.pool_scale) // self.H.pool_features)(x)
-        x = rearrange(x, "... l (d m) -> ... (l m) d", m=self.H.pool_scale)
+        pool_scale = self.pool_scale or self.H.pool_scale
+        pool_features = self.pool_features or self.H.pool_features
+        assert (dim * pool_scale) % pool_features == 0
+        x = nn.Dense((dim * pool_scale) // pool_features)(x)
+        x = rearrange(x, "... l (d m) -> ... (l m) d", m=pool_scale)
         return x
 
 
@@ -84,13 +93,13 @@ class DecoderBlock(nn.Module):
             d_out=zdim * 2,
             bidirectional=True,
             residual=False,
-            last_scale=0.1,
+            last_scale=0.5,
         )
         self.p_block = block(
             d_out=zdim * 2 + out_size,
             bidirectional=False,
             residual=False,
-            last_scale=0.1,
+            last_scale=0.5,
         )
         self.res_block = block(
             d_out=out_size,
@@ -101,17 +110,24 @@ class DecoderBlock(nn.Module):
         self.z_proj = nn.Dense(
             out_size, kernel_init=lecun_normal(1 / np.sqrt(self.n_layers))
         )
+        # self.p_down_pool = DownPool(self.H, pool_scale=250, pool_features=1)
+        # self.q_down_pool = DownPool(self.H, pool_scale=250, pool_features=1)
+        # self.z_up_pool = UpPool(self.H, pool_scale=250, pool_features=1)
         if self.up_pool:
             self.up_pool_ = UpPool(self.H)
 
     def __call__(self, x, cond_enc, rng):
         zdim = self.H.zdim * (self.H.pool_features**self.location)
 
-        q = jnp.split(
-            self.q_block(jnp.concat([x, cond_enc], axis=-1)), 2, axis=-1
-        )
-        *p, x_p = jnp.split(self.p_block(x), [zdim, zdim * 2], axis=-1)
+        q = self.q_block(jnp.concat([x, cond_enc], axis=-1))
+        #q = jnp.split(self.q_down_pool(q), 2, axis=-1)
+        q = jnp.split(q, 2, axis=-1)
 
+        p, x_p = jnp.split(self.p_block(x), [zdim * 2], axis=-1)
+        #p = jnp.split(self.p_down_pool(p), 2, axis=-1)
+        p = jnp.split(p, 2, axis=-1)
+
+        # z = self.z_up_pool(gaussian_sample(q, rng))
         z = gaussian_sample(q, rng)
         kl = gaussian_kl(q, p)
 
@@ -123,7 +139,10 @@ class DecoderBlock(nn.Module):
     def sample_prior(self, x, rng):
         zdim = self.H.zdim * (self.H.pool_features**self.location)
 
-        *p, x_p = jnp.split(self.p_block(x), [zdim, zdim * 2], axis=-1)
+        p, x_p = jnp.split(self.p_block(x), [zdim * 2], axis=-1)
+        # p = jnp.split(self.p_down_pool(p), 2, axis=-1)
+        p = jnp.split(p, 2, axis=-1)
+        # z = self.z_up_pool(gaussian_sample(p, rng))
         z = gaussian_sample(p, rng)
         x = self.res_block(x + x_p + self.z_proj(z))
         if self.up_pool:
