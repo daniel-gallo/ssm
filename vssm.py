@@ -1,4 +1,5 @@
 from functools import partial
+from typing_extensions import Union
 
 import flax.linen as nn
 import jax
@@ -6,7 +7,6 @@ import jax.numpy as jnp
 import numpy as np
 from einops import rearrange
 from jax import random
-from typing_extensions import Union
 
 from hps import Hyperparams
 from rnn import RNNBlock, lecun_normal
@@ -93,13 +93,13 @@ class DecoderBlock(nn.Module):
             d_out=zdim * 2,
             bidirectional=True,
             residual=False,
-            last_scale=0.5,
+            last_scale=0.1,
         )
         self.p_block = block(
             d_out=zdim * 2 + out_size,
             bidirectional=False,
             residual=False,
-            last_scale=0.5,
+            last_scale=0.1,
         )
         self.res_block = block(
             d_out=out_size,
@@ -110,24 +110,17 @@ class DecoderBlock(nn.Module):
         self.z_proj = nn.Dense(
             out_size, kernel_init=lecun_normal(1 / np.sqrt(self.n_layers))
         )
-        # self.p_down_pool = DownPool(self.H, pool_scale=250, pool_features=1)
-        # self.q_down_pool = DownPool(self.H, pool_scale=250, pool_features=1)
-        # self.z_up_pool = UpPool(self.H, pool_scale=250, pool_features=1)
         if self.up_pool:
             self.up_pool_ = UpPool(self.H)
 
     def __call__(self, x, cond_enc, rng):
         zdim = self.H.zdim * (self.H.pool_features**self.location)
 
-        q = self.q_block(jnp.concat([x, cond_enc], axis=-1))
-        # q = jnp.split(self.q_down_pool(q), 2, axis=-1)
-        q = jnp.split(q, 2, axis=-1)
+        q = jnp.split(
+            self.q_block(jnp.concat([x, cond_enc], axis=-1)), 2, axis=-1
+        )
+        *p, x_p = jnp.split(self.p_block(x), [zdim, zdim * 2], axis=-1)
 
-        p, x_p = jnp.split(self.p_block(x), [zdim * 2], axis=-1)
-        # p = jnp.split(self.p_down_pool(p), 2, axis=-1)
-        p = jnp.split(p, 2, axis=-1)
-
-        # z = self.z_up_pool(gaussian_sample(q, rng))
         z = gaussian_sample(q, rng)
         kl = gaussian_kl(q, p)
 
@@ -139,10 +132,7 @@ class DecoderBlock(nn.Module):
     def sample_prior(self, x, rng):
         zdim = self.H.zdim * (self.H.pool_features**self.location)
 
-        p, x_p = jnp.split(self.p_block(x), [zdim * 2], axis=-1)
-        # p = jnp.split(self.p_down_pool(p), 2, axis=-1)
-        p = jnp.split(p, 2, axis=-1)
-        # z = self.z_up_pool(gaussian_sample(p, rng))
+        *p, x_p = jnp.split(self.p_block(x), [zdim, zdim * 2], axis=-1)
         z = gaussian_sample(p, rng)
         x = self.res_block(x + x_p + self.z_proj(z))
         if self.up_pool:
