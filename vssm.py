@@ -1,5 +1,4 @@
 from functools import partial
-from typing_extensions import Union
 
 import flax.linen as nn
 import jax
@@ -7,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 from einops import rearrange
 from jax import random
+from typing_extensions import Union
 
 from hps import Hyperparams
 from rnn import RNNBlock, lecun_normal
