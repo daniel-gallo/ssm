@@ -1,5 +1,4 @@
 from functools import partial
-from typing_extensions import Union
 
 import flax.linen as nn
 import jax
@@ -7,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 from einops import rearrange
 from jax import random
+from typing_extensions import Union
 
 from hps import Hyperparams
 from rnn import RNNBlock, lecun_normal
@@ -120,11 +120,11 @@ class DecoderBlock(nn.Module):
         zdim = self.H.zdim * (self.H.pool_features**self.location)
 
         q = self.q_block(jnp.concat([x, cond_enc], axis=-1))
-        #q = jnp.split(self.q_down_pool(q), 2, axis=-1)
+        # q = jnp.split(self.q_down_pool(q), 2, axis=-1)
         q = jnp.split(q, 2, axis=-1)
 
         p, x_p = jnp.split(self.p_block(x), [zdim * 2], axis=-1)
-        #p = jnp.split(self.p_down_pool(p), 2, axis=-1)
+        # p = jnp.split(self.p_down_pool(p), 2, axis=-1)
         p = jnp.split(p, 2, axis=-1)
 
         # z = self.z_up_pool(gaussian_sample(q, rng))
