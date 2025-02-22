@@ -59,7 +59,7 @@ class RNN(nn.Module):
     reverse: bool = False
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, h_prev=None):
         batch_size, seq_len, _ = x.shape
 
         def stable_init(rng, shape):
@@ -81,15 +81,16 @@ class RNN(nn.Module):
         if self.H.rnn_norm_input:
             x = jnp.sqrt(1 - a**2) * x
         a = jnp.broadcast_to(a, x.shape)
-        h, _ = scan.linear_scan(
+        h, h_last = scan.linear_scan(
             x=x,
             a=a,
+            h0=h_prev,
             reverse=self.reverse,
             scan_type=get_scan_implementation(self.H),
             sharding_spec=SHARDING_SPEC,
             unroll=128,
         )
-        return (dx + nn.Dense(self.d_out)(h)) / 2
+        return (dx + nn.Dense(self.d_out)(h)) / 2, h_last
 
 
 class RGLRU(nn.Module):
@@ -99,7 +100,7 @@ class RGLRU(nn.Module):
     reverse: bool = False
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, h_prev=None):
         # TODO: implement BlockDiagonalLinear from RecurrentGemma
         batch_size, seq_len, _ = x.shape
 
@@ -129,15 +130,16 @@ class RGLRU(nn.Module):
         x = gate_x * x
         x = (1 - a_squared) ** 0.5 * x
 
-        h, _ = scan.linear_scan(
+        h, h_last = scan.linear_scan(
             x=x,
             a=a,
+            h0=h_prev,
             reverse=self.reverse,
             scan_type=get_scan_implementation(self.H),
             sharding_spec=SHARDING_SPEC,
             unroll=128,
         )
-        return (dx + nn.Dense(self.d_out)(h)) / 2
+        return (dx + nn.Dense(self.d_out)(h)) / 2, h_last
 
 
 class RNNBlock(nn.Module):
@@ -163,14 +165,15 @@ class RNNBlock(nn.Module):
             )
         self.last_dense = nn.Dense(self.d_out)
 
-    def __call__(self, x):
+    def __call__(self, x, h_prev=None):
+        assert not h_prev or not self.bidirectional
         identity = x
         x = nn.gelu(x)
-        x_fwd = self.forward(x)
-        x = (x_fwd + self.backward(x)) / 2 if self.bidirectional else x_fwd
+        x_fwd, h_next = self.forward(x)
+        x = (x_fwd + self.backward(x)[0]) / 2 if self.bidirectional else x_fwd
         x = x + identity if self.residual else x
 
         x = nn.gelu(x)
         x = self.last_dense(x)
         x = x + identity if self.residual else x
-        return self.last_scale * x
+        return self.last_scale * x, h_next
