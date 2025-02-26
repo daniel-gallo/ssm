@@ -92,6 +92,9 @@ class RNN(nn.Module):
         )
         return (dx + nn.Dense(self.d_out)(h)) / 2, h_last
 
+    def default_state(self, batch_size):
+        return jnp.zeros((batch_size, self.d_hidden))
+
 
 class RGLRU(nn.Module):
     H: Hyperparams
@@ -141,6 +144,9 @@ class RGLRU(nn.Module):
         )
         return (dx + nn.Dense(self.d_out)(h)) / 2, h_last
 
+    def default_state(self, batch_size):
+        return jnp.zeros((batch_size, self.d_hidden))
+
 
 class RNNBlock(nn.Module):
     H: Hyperparams
@@ -177,3 +183,9 @@ class RNNBlock(nn.Module):
         x = self.last_dense(x)
         x = x + identity if self.residual else x
         return self.last_scale * x, h_next
+
+    def step(self, x, state):
+        return self(x, h_prev=state)
+
+    def default_state(self, batch_size):
+        return self.forward.default_state(batch_size)

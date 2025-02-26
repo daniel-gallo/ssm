@@ -36,7 +36,18 @@ class Hyperparams:
     rnn_pos_embedding: bool = True
     rnn_block: str = "rnn"
 
-    scan_implementation: str = "linear_pallas"
+    # temp. parameters for autoregressive
+    autoregressive: bool = True
+    ar_base_dim: int = 64
+    ar_ff_dropout: float = 0.2
+    ar_ff_expand: int = 2
+
+    ar_n_layers: int = 2
+    ar_pool: tuple[int, ...] = (4, 4)
+    ar_expand: tuple[int, ...] = (2, 2)
+    # ================================
+
+    scan_implementation: str = "linear_native"
 
     dataset: str = "binarized-mnist"
     seed: int = 0
