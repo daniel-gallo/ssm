@@ -1,4 +1,5 @@
 import dataclasses
+import os
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -9,6 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import tyro
 from flax.training import checkpoints
 from jax import random, tree_util
 from jax.sharding import NamedSharding
@@ -17,8 +19,8 @@ from jax.tree_util import tree_leaves
 from jax.util import safe_map
 
 from data import load_data, save_samples
-from hps import Hyperparams, load_options
-from vssm import VSSM
+from hps import Hyperparams
+from vssm import VSSMHyperparams
 
 map = safe_map
 _mesh = jax.make_mesh((jax.device_count(),), ("batch",))
@@ -74,7 +76,7 @@ class TrainState:
 
 def load_train_state(H: Hyperparams):
     rng_init, rng_train = random.split(random.PRNGKey(H.seed))
-    weights = VSSM(H).init(
+    weights = H.model.init(
         rng_init,
         jnp.zeros((H.batch_size,) + H.data_shape, "int32"),
         random.PRNGKey(0),
@@ -104,7 +106,7 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
     rng, rng_iter = random.split(S.rng)
 
     def lossfun(weights):
-        return VSSM(H).apply(weights, batch, rng_iter)
+        return H.model.apply(weights, batch, rng_iter)
 
     gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
     gradval, skip = clip_grad(H, gradval, metrics)
@@ -143,7 +145,7 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
 
 @partial(jax.jit, static_argnums=0)
 def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
-    _, metrics = VSSM(H).apply(S.weights, batch, rng_iter)
+    _, metrics = H.model.apply(S.weights, batch, rng_iter)
     return metrics
 
 
@@ -163,12 +165,12 @@ def generate_samples(H: Hyperparams, S: TrainState):
     save_samples(
         H,
         S.step,
-        VSSM(H).apply(
+        H.model.apply(
             S.weights,
             H.data_seq_length,
             H.num_samples_per_eval,
             S.rng,
-            method=VSSM.sample_prior,
+            method=H.sample_prior,
         ),
     )
 
@@ -192,6 +194,24 @@ def train(H: Hyperparams, S: TrainState, data):
 
             if H.num_samples_per_eval:
                 generate_samples(H, S)
+
+
+def load_options():
+    H = tyro.cli(VSSMHyperparams)
+
+    os.makedirs(H.log_dir, exist_ok=True)
+    with open(path.join(H.log_dir, H.id + ".yaml"), "w") as f:
+        f.write(tyro.to_yaml(H))
+
+    if H.enable_wandb:
+        import wandb
+
+        wandb.init(
+            config=dataclasses.asdict(H),
+            name=H.id,
+        )
+    H.logprint("Launching run", id=H.id)
+    return H
 
 
 def main():
