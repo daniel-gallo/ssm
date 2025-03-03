@@ -58,7 +58,9 @@ def clip_grad(H: Hyperparams, g, metrics):
     skip = jnp.isnan(metrics["loss"]) | ~(norm < H.skip_threshold)
     assert jnp.isscalar(skip)
 
-    return treedef.unflatten([clip_coeff * x for x in g_flat]), skip
+    metrics["grad_norm"] = norm
+
+    return treedef.unflatten([clip_coeff * x for x in g_flat]), skip, metrics
 
 
 def cond(pred, true_val, false_val):
@@ -109,7 +111,7 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
         return H.model.apply(weights, batch, rng_iter)
 
     gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
-    gradval, skip = clip_grad(H, gradval, metrics)
+    gradval, skip, metrics = clip_grad(H, gradval, metrics)
 
     updates, optimizer_state_new = H.optimizer.update(
         gradval, S.optimizer_state, S.weights
