@@ -26,7 +26,7 @@ class Hyperparams:
     grad_clip: float = 200
     skip_threshold: float = 1000
     shuffle_before_epoch: bool = True
-    enable_wandb: bool = False
+    enable_wandb: bool = True
     steps_per_print: int = 1000
     epochs_per_eval: int = 1
     mins_per_checkpoint: float = 30
