@@ -10,7 +10,7 @@ from jax import random
 from typing_extensions import Union
 
 from hps import Hyperparams
-from rnn import RNNBlock, lecun_normal
+from models.rnn import RNNBlock, lecun_normal
 
 
 def gaussian_kl(q, p):

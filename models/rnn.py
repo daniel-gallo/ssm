@@ -3,8 +3,8 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import expit, logit
 
-from efficient_scan import common, pallas, scan
 from hps import Hyperparams
+from models.efficient_scan import common, pallas, scan
 
 # TODO: probably should be passed in train.py
 _mesh = jax.make_mesh((jax.device_count(),), ("batch",))

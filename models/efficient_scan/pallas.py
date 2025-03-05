@@ -23,7 +23,7 @@ import jax.experimental.pallas as pl
 import jax.numpy as jnp
 from jax._src.lax.control_flow import for_loop
 
-from efficient_scan import complex_lib
+from models.efficient_scan import complex_lib
 
 T = TypeVar("T")
 Spec = TypeVar("Spec", complex_lib.Complex, pl.BlockSpec, None)

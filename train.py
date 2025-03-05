@@ -20,7 +20,7 @@ from jax.util import safe_map
 
 from data import load_data, save_samples
 from hps import Hyperparams
-from vssm import VSSMHyperparams
+from models import S4Hyperparams, VSSMHyperparams
 
 map = safe_map
 _mesh = jax.make_mesh((jax.device_count(),), ("batch",))
@@ -108,7 +108,10 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
     rng, rng_iter = random.split(S.rng)
 
     def lossfun(weights):
-        return H.model.apply(weights, batch, rng_iter)
+        # TODO: use JAX rng instead of FLAX (temporary fix for the S4 code)
+        return H.model.apply(
+            weights, batch, rng_iter, rngs={"dropout": rng_iter}
+        )
 
     gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
     gradval, skip, metrics = clip_grad(H, gradval, metrics)
@@ -147,7 +150,10 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
 
 @partial(jax.jit, static_argnums=0)
 def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
-    _, metrics = H.model.apply(S.weights, batch, rng_iter)
+    # TODO: use JAX rng instead of FLAX (temporary fix for the S4 code)
+    _, metrics = H.model.apply(
+        S.weights, batch, rng_iter, rngs={"dropout": rng_iter}
+    )
     return metrics
 
 
@@ -213,7 +219,7 @@ def log_configuration(H):
 
 
 def main():
-    H = tyro.cli(VSSMHyperparams)
+    H = tyro.cli(VSSMHyperparams | S4Hyperparams)
     H, data = load_data(H)
     log_configuration(H)
 

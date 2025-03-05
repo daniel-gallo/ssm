@@ -22,7 +22,7 @@ import jax.numpy as jnp
 from absl import logging
 from jax.experimental import shard_map
 
-from efficient_scan import common, complex_lib, pallas
+from models.efficient_scan import common, complex_lib, pallas
 
 ShardingSpec = pallas.ShardingSpec
 lru_pallas_scan = pallas.lru_pallas_scan
