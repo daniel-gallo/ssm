@@ -198,9 +198,7 @@ def train(H: Hyperparams, S: TrainState, data):
                 generate_samples(H, S)
 
 
-def load_options():
-    H = tyro.cli(VSSMHyperparams)
-
+def log_configuration(H):
     os.makedirs(H.log_dir, exist_ok=True)
     with open(path.join(H.log_dir, H.id + ".yaml"), "w") as f:
         f.write(tyro.to_yaml(H))
@@ -212,17 +210,16 @@ def load_options():
             config=dataclasses.asdict(H),
             name=H.id,
         )
-    H.logprint("Launching run", id=H.id)
-    return H
 
 
 def main():
-    H = load_options()
-    H.logprint("Loading data")
+    H = tyro.cli(VSSMHyperparams)
     H, data = load_data(H)
+    log_configuration(H)
+
     H.logprint("Loading train state")
     S = load_train_state(H)
-    H.logprint("Training")
+    H.logprint("Training", id=H.id)
     train(H, S, data)
     if H.enable_wandb:
         import wandb
