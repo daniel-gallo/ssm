@@ -1,4 +1,5 @@
 import dataclasses
+import os
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -9,6 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import tyro
 from flax.training import checkpoints
 from jax import random, tree_util
 from jax.sharding import NamedSharding
@@ -16,10 +18,9 @@ from jax.sharding import PartitionSpec as P
 from jax.tree_util import tree_leaves
 from jax.util import safe_map
 
-from autoregressive import ARModel
 from data import load_data, save_samples
-from hps import Hyperparams, load_options
-from vssm import VSSM
+from hps import Hyperparams
+from vssm import VSSMHyperparams
 
 map = safe_map
 _mesh = jax.make_mesh((jax.device_count(),), ("batch",))
@@ -60,7 +61,9 @@ def clip_grad(H: Hyperparams, g, metrics):
         skip = jnp.isnan(metrics["loss"])
     assert jnp.isscalar(skip)
 
-    return treedef.unflatten([clip_coeff * x for x in g_flat]), skip
+    metrics["grad_norm"] = norm
+
+    return treedef.unflatten([clip_coeff * x for x in g_flat]), skip, metrics
 
 
 def cond(pred, true_val, false_val):
@@ -78,8 +81,7 @@ class TrainState:
 
 def load_train_state(H: Hyperparams):
     rng_init, rng_train = random.split(random.PRNGKey(H.seed))
-    model = VSSM if not H.autoregressive else ARModel
-    weights = model(H).init(
+    weights = H.model.init(
         rng_init,
         jnp.zeros((H.batch_size,) + H.data_shape, "int32"),
         random.PRNGKey(0),
@@ -109,11 +111,10 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
     rng, rng_iter = random.split(S.rng)
 
     def lossfun(weights):
-        model = VSSM if not H.autoregressive else ARModel
-        return model(H).apply(weights, batch, rng_iter)
+        return H.model.apply(weights, batch, rng_iter)
 
     gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
-    gradval, skip = clip_grad(H, gradval, metrics)
+    gradval, skip, metrics = clip_grad(H, gradval, metrics)
 
     updates, optimizer_state_new = H.optimizer.update(
         gradval, S.optimizer_state, S.weights
@@ -149,8 +150,7 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
 
 @partial(jax.jit, static_argnums=0)
 def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
-    model = VSSM if not H.autoregressive else ARModel
-    _, metrics = model(H).apply(S.weights, batch, rng_iter)
+    _, metrics = H.model.apply(S.weights, batch, rng_iter)
     return metrics
 
 
@@ -167,16 +167,15 @@ def eval(H: Hyperparams, S: TrainState, data):
 
 
 def generate_samples(H: Hyperparams, S: TrainState):
-    model = VSSM if not H.autoregressive else ARModel
     save_samples(
         H,
         S.step,
-        model(H).apply(
+        H.model.apply(
             S.weights,
             H.data_seq_length,
             H.num_samples_per_eval,
             S.rng,
-            method=model.sample_prior,
+            method=H.sample_prior,
         ),
     )
 
@@ -202,13 +201,28 @@ def train(H: Hyperparams, S: TrainState, data):
             generate_samples(H, S)
 
 
+def log_configuration(H):
+    os.makedirs(H.log_dir, exist_ok=True)
+    with open(path.join(H.log_dir, H.id + ".yaml"), "w") as f:
+        f.write(tyro.to_yaml(H))
+
+    if H.enable_wandb:
+        import wandb
+
+        wandb.init(
+            config=dataclasses.asdict(H),
+            name=H.id,
+        )
+
+
 def main():
-    H = load_options()
-    H.logprint("Loading data")
+    H = tyro.cli(VSSMHyperparams)
     H, data = load_data(H)
+    log_configuration(H)
+
     H.logprint("Loading train state")
     S = load_train_state(H)
-    H.logprint("Training")
+    H.logprint("Training", id=H.id)
     train(H, S, data)
     if H.enable_wandb:
         import wandb

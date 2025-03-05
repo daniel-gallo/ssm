@@ -1,3 +1,4 @@
+import dataclasses
 from functools import partial
 
 import flax.linen as nn
@@ -46,9 +47,38 @@ def loss_and_metrics(logits, kls, x):
     return loss, {"loss": loss, "log-like": ll, "kl-total": kl_total, **kls}
 
 
+@dataclasses.dataclass(frozen=True)
+class VSSMHyperparams(Hyperparams):
+    encoder_rnn_layers: tuple[int, ...] = (2, 2)
+    decoder_rnn_layers: tuple[int, ...] = (2, 2)
+
+    zdim: int = 8
+
+    pool_scale: int = 28
+    pool_features: int = 2
+
+    rnn_init_minval: float = 0.4
+    rnn_init_maxval: float = 0.99
+    rnn_norm_input: bool = True
+    rnn_hidden_size: int = 128
+    rnn_out_size: int = 16
+    rnn_pos_embedding: bool = True
+    rnn_block: str = "rnn"
+
+    scan_implementation: str = "linear_pallas"
+
+    @property
+    def model(self):
+        return VSSM(self)
+
+    @property
+    def sample_prior(self):
+        return VSSM.sample_prior
+
+
 class DownPool(nn.Module):
     # TODO: add support for padding
-    H: Hyperparams
+    H: VSSMHyperparams
     pool_scale: Union[int, None] = None
     pool_features: Union[int, None] = None
 
@@ -63,7 +93,7 @@ class DownPool(nn.Module):
 
 class UpPool(nn.Module):
     # TODO: add support for padding
-    H: Hyperparams
+    H: VSSMHyperparams
     pool_scale: Union[int, None] = None
     pool_features: Union[int, None] = None
 
@@ -80,7 +110,7 @@ class UpPool(nn.Module):
 
 class DecoderBlock(nn.Module):
     # TODO: also adapt the rnn hidden size according to location
-    H: Hyperparams
+    H: VSSMHyperparams
     n_layers: int
     up_pool: bool = False
     location: int = 0
@@ -141,7 +171,7 @@ class DecoderBlock(nn.Module):
 
 
 class Decoder(nn.Module):
-    H: Hyperparams
+    H: VSSMHyperparams
 
     def setup(self):
         H = self.H
@@ -223,7 +253,7 @@ class Decoder(nn.Module):
 
 
 class Encoder(nn.Module):
-    H: Hyperparams
+    H: VSSMHyperparams
 
     @nn.compact
     def __call__(self, x):
@@ -257,7 +287,7 @@ class Encoder(nn.Module):
 
 
 class VSSM(nn.Module):
-    H: Hyperparams
+    H: VSSMHyperparams
 
     def setup(self):
         self.encoder = Encoder(H=self.H)

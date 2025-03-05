@@ -32,6 +32,14 @@ def load_data(H: Hyperparams):
 
 
 def load_mnist_binarized(H: Hyperparams):
+    H = dataclasses.replace(
+        H,
+        data_seq_length=784,
+        data_num_channels=1,
+        data_num_cats=2,
+        data_preprocess_fn=lambda x: 2 * x - 1,
+    )
+
     root_dir = path.join(H.data_dir, "mnist-binarized")
     fname_train_amat = path.join(root_dir, "train.amat")
     fname_val_amat = path.join(root_dir, "val.amat")
@@ -81,13 +89,6 @@ def load_mnist_binarized(H: Hyperparams):
     assert train.shape == (60_000, 784, 1)
     assert test.shape == (10_000, 784, 1)
 
-    H = dataclasses.replace(
-        H,
-        data_seq_length=784,
-        data_num_channels=1,
-        data_num_cats=2,
-        data_preprocess_fn=lambda x: 2 * x - 1,
-    )
     return H, (train, test)
 
 
@@ -168,6 +169,14 @@ def load_sc09(H):
     zip_file = data_dir / "sc09.zip"
     cache_file = base_dir / "cache.npz"
 
+    H = dataclasses.replace(
+        H,
+        data_seq_length=seq_len,
+        data_num_channels=1,
+        data_num_cats=num_cats,
+        data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+    )
+
     maybe_download(
         H,
         "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip",
@@ -215,13 +224,6 @@ def load_sc09(H):
 
     np.random.RandomState(H.seed).shuffle(train)
 
-    H = dataclasses.replace(
-        H,
-        data_seq_length=seq_len,
-        data_num_channels=1,
-        data_num_cats=num_cats,
-        data_preprocess_fn=lambda x: (2 * x / 256) - 1,
-    )
     return H, (train, test)
 
 
@@ -232,6 +234,14 @@ def load_beethoven(H):
     base_dir = data_dir / "beethoven"
     zip_file = data_dir / "beethoven.zip"
     cache_file = base_dir / "cache.npz"
+
+    H = dataclasses.replace(
+        H,
+        data_seq_length=seq_len,
+        data_num_channels=1,
+        data_num_cats=num_cats,
+        data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+    )
 
     maybe_download(
         H,
@@ -269,13 +279,6 @@ def load_beethoven(H):
     assert train.shape == (3808, seq_len, 1)
     assert test.shape == (520, seq_len, 1)
 
-    H = dataclasses.replace(
-        H,
-        data_seq_length=seq_len,
-        data_num_channels=1,
-        data_num_cats=num_cats,
-        data_preprocess_fn=lambda x: (2 * x / 256) - 1,
-    )
     return H, (train, test)
 
 
@@ -286,6 +289,14 @@ def load_youtube_mix(H):
     base_dir = data_dir / "youtube_mix"
     zip_file = data_dir / "youtube_mix.zip"
     cache_file = base_dir / "cache.npz"
+
+    H = dataclasses.replace(
+        H,
+        data_seq_length=seq_len,
+        data_num_channels=1,
+        data_num_cats=num_cats,
+        data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+    )
 
     maybe_download(
         H,
@@ -325,13 +336,6 @@ def load_youtube_mix(H):
     assert train.shape == (212, seq_len, 1)
     assert test.shape == (29, seq_len, 1)
 
-    H = dataclasses.replace(
-        H,
-        data_seq_length=seq_len,
-        data_num_channels=1,
-        data_num_cats=num_cats,
-        data_preprocess_fn=lambda x: (2 * x / 256) - 1,
-    )
     return H, (train, test)
 
 
