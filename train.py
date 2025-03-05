@@ -54,7 +54,10 @@ def clip_grad(H: Hyperparams, g, metrics):
     norm = jnp.linalg.norm(jnp.array(map(jnp.linalg.norm, g_flat)))
     clip_coeff = jnp.minimum(H.grad_clip / (norm + 1e-6), 1)
 
-    skip = jnp.isnan(metrics["loss"]) | ~(norm < H.skip_threshold)
+    if H.skip_threshold:
+        skip = jnp.isnan(metrics["loss"]) | ~(norm < H.skip_threshold)
+    else:
+        skip = jnp.isnan(metrics["loss"])
     assert jnp.isscalar(skip)
 
     return treedef.unflatten([clip_coeff * x for x in g_flat]), skip
@@ -192,11 +195,11 @@ def train(H: Hyperparams, S: TrainState, data):
                 path.abspath(H.checkpoint_dir), S, S.step, H.checkpoint_prefix
             )
             t_last_checkpoint = time.time()
-        if not e % H.epochs_per_eval:
+        if not (e + 1) % H.epochs_per_eval:
             H.log(S.step, eval(H, S, data_test))
 
-            if H.num_samples_per_eval:
-                generate_samples(H, S)
+        if H.num_samples_per_eval and (not (e + 1) % H.epochs_per_gen):
+            generate_samples(H, S)
 
 
 def main():

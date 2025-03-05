@@ -2,17 +2,34 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from einops import rearrange
-from optax.losses import softmax_cross_entropy_with_integer_labels
 from typing_extensions import Union
 
 from hps import Hyperparams
-from rnn import RNNBlock
+from rnn import get_recurrent_block
 
 
-def loss_and_metrics(logits, target):
-    loss = softmax_cross_entropy_with_integer_labels(logits, target[..., 0])
-    loss = jnp.mean(loss)
-    return loss, {"loss": loss}
+def log_likelihood(logits, x):
+    bat, seq, chan, cat = logits.shape
+    assert x.shape == (bat, seq, chan)
+    return jnp.sum(
+        jnp.take_along_axis(jax.nn.log_softmax(logits), x[..., None], -1)
+    )
+
+
+def loss_and_metrics(logits, x):
+    normalizer = x.size * jnp.log(2)
+    ll = log_likelihood(logits, x) / normalizer
+    loss = -ll
+    return loss, {
+        "loss": loss,
+        "log-like": ll,
+        "mean_0": jnp.mean(logits[:, 0]),
+        "max_0": jnp.max(logits[:, 0]),
+        "min_0": jnp.min(logits[:, 0]),
+        "mean_l": jnp.mean(logits[:, -1]),
+        "max_l": jnp.max(logits[:, -1]),
+        "min_l": jnp.min(logits[:, -1]),
+    }
 
 
 class DownPool(nn.Module):
@@ -24,14 +41,13 @@ class DownPool(nn.Module):
 
     def setup(self):
         pool_features = self.pool_features or self.H.pool_features
-
         self.linear = nn.Dense(self.input_dim * pool_features)
 
     def __call__(self, x):
         pool_scale = self.pool_scale or self.H.pool_scale
 
         batch_size, seq_len, dim = x.shape
-        x = rearrange(x, "...(l m) d -> ... l (d m)", m=pool_scale)
+        x = rearrange(x, "...(l m) d -> ... l (m d)", m=pool_scale)
         return self.linear(x), None
 
     def step(self, x, state):
@@ -42,7 +58,7 @@ class DownPool(nn.Module):
         state = jnp.concatenate([state, x], axis=1)
         if state.shape[1] == pool_scale:
             batch_size, seq_len, dim = x.shape
-            x = rearrange(state, "... h s -> ... (h s)")
+            x = rearrange(state, "... l d -> ... (l d)")
             x = x[:, None, :]
             x = self.linear(x)
             return x, jnp.zeros((batch_size, 0, dim))
@@ -72,9 +88,9 @@ class UpPool(nn.Module):
 
         batch_size, seq_len, dim = x.shape
         x = self.linear(x)
-        # not sure about it, was in sushi code though
+        # ensures causal relationship
         x = jnp.pad(x[:, :-1, :], ((0, 0), (1, 0), (0, 0)))
-        x = rearrange(x, "... l (d m) -> ... (l m) d", m=pool_scale)
+        x = rearrange(x, "... l (m d) -> ... (l m) d", m=pool_scale)
         return x, None
 
     def step(self, x, state):
@@ -85,16 +101,19 @@ class UpPool(nn.Module):
         if state.shape[1] == 0:
             assert x is not None
             x = self.linear(x)
-            x = rearrange(x, "... l (d m) -> ... (l m) d", m=pool_scale)
+            x = rearrange(x, "... l (m d) -> ... (l m) d", m=pool_scale)
             state = x
         else:
             assert x is None
-        return y, state
+        return y[:, None, :], state
 
     def default_state(self, batch_size):
         pool_scale = self.pool_scale or self.H.pool_scale
+        pool_features = self.pool_features or self.H.pool_features
 
-        return jnp.zeros((batch_size, pool_scale, self.input_dim))
+        return jnp.zeros(
+            (batch_size, pool_scale, self.input_dim // (pool_features))
+        )
 
 
 class ResBlock(nn.Module):
@@ -105,20 +124,61 @@ class ResBlock(nn.Module):
     def __call__(self, x, deterministic=False):
         bs, seq_len, dim = x.shape
         expand = self.expand or self.H.ar_ff_expand
-        z = nn.LayerNorm()(x)
-        z = nn.Dense(dim * expand)(x)
-        # z = nn.Dropout(self.H.ar_ff_dropout)(
-        #     nn.gelu(z), deterministic=deterministic
-        # )
+        z = nn.LayerNorm(feature_axes=-1)(x)
+        z = nn.Dense(dim * expand)(z)
         z = nn.gelu(z)
         z = nn.Dense(dim)(z)
         return x + z, None
 
     def step(self, x, state):
-        return self(x), state
+        return self(x)
 
     def default_state(self, batch_size):
         return None
+
+
+class RNNBlock(nn.Module):
+    H: Hyperparams
+    d_out: int
+    bidirectional: bool = False
+    residual: bool = False
+    last_scale: float = 1.0
+
+    def setup(self):
+        recurrent_block = get_recurrent_block(self.H)
+        self.forward = recurrent_block(
+            self.H,
+            d_hidden=self.H.rnn_hidden_size,
+            d_out=self.d_out,
+        )
+        if self.bidirectional:
+            self.backward = recurrent_block(
+                self.H,
+                d_hidden=self.H.rnn_hidden_size,
+                d_out=self.d_out,
+                reverse=True,
+            )
+        self.last_dense = nn.Dense(self.d_out)
+        self.norm = nn.LayerNorm(feature_axes=-1)
+
+    def __call__(self, x, h_prev=None):
+        assert h_prev is None or not self.bidirectional
+        identity = x
+        x = self.norm(x)
+        x_fwd, h_next = self.forward(x, h_prev)
+        x = (x_fwd + self.backward(x)[0]) / 2 if self.bidirectional else x_fwd
+        x = x + identity if self.residual else x
+
+        x = nn.gelu(x)
+        x = self.last_dense(x)
+        x = x + identity if self.residual else x
+        return self.last_scale * x, h_next
+
+    def step(self, x, state):
+        return self(x, h_prev=state)
+
+    def default_state(self, batch_size):
+        return self.forward.default_state(batch_size)
 
 
 class ARModel(nn.Module):
@@ -127,6 +187,7 @@ class ARModel(nn.Module):
     def setup(self):
         self.input_mlp = nn.Dense(self.H.ar_base_dim)
         self.cls_mlp = nn.Dense(self.H.data_num_cats)
+        self.norm = nn.LayerNorm(feature_axes=-1)
 
         d_layers = []
         model_dim = self.H.ar_base_dim
@@ -143,7 +204,14 @@ class ARModel(nn.Module):
 
         c_layers = []
         for _ in range(self.H.ar_n_layers):
-            c_layers.append(RNNBlock(self.H, model_dim, residual=True))
+            c_layers.append(
+                RNNBlock(
+                    self.H,
+                    model_dim,
+                    residual=True,
+                    last_scale=self.H.ar_last_scale,
+                )
+            )
             c_layers.append(ResBlock(self.H))
 
         u_layers = []
@@ -161,7 +229,14 @@ class ARModel(nn.Module):
             model_dim = model_dim // expand
 
             for _ in range(self.H.ar_n_layers):
-                block.append(RNNBlock(self.H, model_dim, residual=True))
+                block.append(
+                    RNNBlock(
+                        self.H,
+                        model_dim,
+                        residual=True,
+                        last_scale=self.H.ar_last_scale,
+                    )
+                )
                 block.append(ResBlock(self.H))
             u_layers.append(block)
 
@@ -173,8 +248,9 @@ class ARModel(nn.Module):
 
     def __call__(self, x, rng=None):
         target = x.copy()
-        # temp. treat zero vector as kinda eos token
+        batch_size, seq_len, _ = x.shape
 
+        x = self.H.data_preprocess_fn(x)
         x = jnp.pad(x[:, :-1, :], ((0, 0), (1, 0), (0, 0)))
         x = self.input_mlp(x)
         outputs = []
@@ -196,15 +272,30 @@ class ARModel(nn.Module):
                     outputs.append(x)
             x = x + outputs.pop()
 
-        x = self.cls_mlp(x)
+        # x = self.norm(x)
+        x = jnp.reshape(
+            self.cls_mlp(x),
+            (
+                batch_size,
+                seq_len,
+                self.H.data_num_channels,
+                self.H.data_num_cats,
+            ),
+        )
         return loss_and_metrics(x, target)
 
     def default_state(self, batch_size):
-        layers = list(self.d_layers) + list(self.c_layers) + list(self.u_layers)
+        layers = (
+            list(self.d_layers)
+            + list(self.c_layers)
+            + [layer for block in self.u_layers for layer in block]
+        )
         return [layer.default_state(batch_size) for layer in layers]
 
     def step(self, x, state):
         state = state[::-1]
+
+        x = self.input_mlp(x)
 
         outputs = []
         next_state = []
@@ -241,6 +332,7 @@ class ARModel(nn.Module):
             x = x + outputs.pop()
 
         x = self.cls_mlp(x)
+
         return x, next_state
 
     def sample_prior(self, gen_len, n_samples, rng, data_preprocess_fn=None):
@@ -253,6 +345,6 @@ class ARModel(nn.Module):
             x, state = self.step(x, state)
             x = jax.random.categorical(iter_rng, x, axis=-1)
             output.append(jax.nn.one_hot(x, num_classes=self.H.data_num_cats))
-            x = x[..., None]
+            x = self.H.data_preprocess_fn(x[..., None])
 
         return jnp.concatenate(output, axis=1)

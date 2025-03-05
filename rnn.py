@@ -120,10 +120,8 @@ class RGLRU(nn.Module):
             x = jnp.concatenate(
                 [x, get_sinusoidal_embeddings(batch_size, seq_len, 16)], -1
             )
-        dx = nn.Dense(self.d_out)(x)
         x = nn.Dense(self.d_hidden)(x)
-        if self.H.rnn_norm_input:
-            x = jnp.sqrt(1 - a_expit**2) * x
+
         gate_x = nn.sigmoid(nn.Dense(self.d_hidden)(x))
         gate_a = nn.sigmoid(nn.Dense(self.d_hidden)(x))
 
@@ -131,7 +129,10 @@ class RGLRU(nn.Module):
         a_squared = a**2
 
         x = gate_x * x
-        x = (1 - a_squared) ** 0.5 * x
+        # TODO: placement of norm corresponding to RGLRU
+        # reconsider doing it before gating
+        if self.H.rnn_norm_input:
+            x = jnp.sqrt(1 - a_squared) * x
 
         h, h_last = scan.linear_scan(
             x=x,
@@ -142,7 +143,7 @@ class RGLRU(nn.Module):
             sharding_spec=SHARDING_SPEC,
             unroll=128,
         )
-        return (dx + nn.Dense(self.d_out)(h)) / 2, h_last
+        return nn.Dense(self.d_out)(h), h_last
 
     def default_state(self, batch_size):
         return jnp.zeros((batch_size, self.d_hidden))
@@ -171,21 +172,14 @@ class RNNBlock(nn.Module):
             )
         self.last_dense = nn.Dense(self.d_out)
 
-    def __call__(self, x, h_prev=None):
-        assert not h_prev or not self.bidirectional
+    def __call__(self, x):
         identity = x
         x = nn.gelu(x)
-        x_fwd, h_next = self.forward(x)
+        x_fwd, _ = self.forward(x)
         x = (x_fwd + self.backward(x)[0]) / 2 if self.bidirectional else x_fwd
         x = x + identity if self.residual else x
 
         x = nn.gelu(x)
         x = self.last_dense(x)
         x = x + identity if self.residual else x
-        return self.last_scale * x, h_next
-
-    def step(self, x, state):
-        return self(x, h_prev=state)
-
-    def default_state(self, batch_size):
-        return self.forward.default_state(batch_size)
+        return self.last_scale * x

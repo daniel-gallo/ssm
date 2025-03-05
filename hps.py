@@ -25,46 +25,48 @@ class Hyperparams:
 
     zdim: int = 8
 
-    pool_scale: int = 28
+    pool_scale: int = 4
     pool_features: int = 2
 
-    rnn_init_minval: float = 0.4
-    rnn_init_maxval: float = 0.99
+    rnn_init_minval: float = 0.6
+    rnn_init_maxval: float = 0.999
     rnn_norm_input: bool = True
     rnn_hidden_size: int = 128
     rnn_out_size: int = 16
     rnn_pos_embedding: bool = True
-    rnn_block: str = "rnn"
+    rnn_block: str = "rglru"
 
     # temp. parameters for autoregressive
-    autoregressive: bool = True
+    autoregressive: bool = False
     ar_base_dim: int = 64
     ar_ff_dropout: float = 0.2
     ar_ff_expand: int = 2
 
-    ar_n_layers: int = 2
+    ar_n_layers: int = 4
+    ar_last_scale: float = 0.25
     ar_pool: tuple[int, ...] = (4, 4)
     ar_expand: tuple[int, ...] = (2, 2)
     # ================================
 
-    scan_implementation: str = "linear_native"
+    scan_implementation: str = "linear_pallas"
 
-    dataset: str = "binarized-mnist"
+    dataset: str = "sc09"
     seed: int = 0
-    batch_size: int = 32
-    learning_rate: float = 1e-3
+    batch_size: int = 8
+    learning_rate: float = 1e-4
     grad_clip: float = 200
-    skip_threshold: float = 1000
+    skip_threshold: Optional[float] = None
     shuffle_before_epoch: bool = True
 
     enable_wandb: bool = False
 
     steps_per_print: int = 1000
     epochs_per_eval: int = 1
+    epochs_per_gen: int = 50
     mins_per_checkpoint: float = 30
     num_samples_per_eval: int = 8
 
-    num_epochs: int = 30
+    num_epochs: int = 500
     batch_size_eval: int = 128
 
     # Other useful meta-data, set automatically

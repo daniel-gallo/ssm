@@ -117,14 +117,14 @@ class DecoderBlock(nn.Module):
         zdim = self.H.zdim * (self.H.pool_features**self.location)
 
         q = jnp.split(
-            self.q_block(jnp.concat([x, cond_enc], axis=-1))[0], 2, axis=-1
+            self.q_block(jnp.concat([x, cond_enc], axis=-1)), 2, axis=-1
         )
-        *p, x_p = jnp.split(self.p_block(x)[0], [zdim, zdim * 2], axis=-1)
+        *p, x_p = jnp.split(self.p_block(x), [zdim, zdim * 2], axis=-1)
 
         z = gaussian_sample(q, rng)
         kl = gaussian_kl(q, p)
 
-        x = self.res_block(x + x_p + self.z_proj(z))[0]
+        x = self.res_block(x + x_p + self.z_proj(z))
         if self.up_pool:
             x = self.up_pool_(x)
         return x, kl
@@ -132,9 +132,9 @@ class DecoderBlock(nn.Module):
     def sample_prior(self, x, rng):
         zdim = self.H.zdim * (self.H.pool_features**self.location)
 
-        *p, x_p = jnp.split(self.p_block(x)[0], [zdim, zdim * 2], axis=-1)
+        *p, x_p = jnp.split(self.p_block(x), [zdim, zdim * 2], axis=-1)
         z = gaussian_sample(p, rng)
-        x = self.res_block(x + x_p + self.z_proj(z))[0]
+        x = self.res_block(x + x_p + self.z_proj(z))
         if self.up_pool:
             x = self.up_pool_(x)
         return x
@@ -240,7 +240,7 @@ class Encoder(nn.Module):
                     bidirectional=True,
                     residual=True,
                     last_scale=1.0,
-                )(x)[0]
+                )(x)
             acts.append(x)
             features = features * H.pool_features
             x = DownPool(H)(x)
@@ -251,7 +251,7 @@ class Encoder(nn.Module):
                 bidirectional=True,
                 residual=True,
                 last_scale=1.0,
-            )(x)[0]
+            )(x)
         acts.append(x)
         return list(reversed(acts))
 
