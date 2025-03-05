@@ -29,7 +29,7 @@ class Hyperparams:
     enable_wandb: bool = True
     steps_per_print: int = 1000
     epochs_per_eval: int = 1
-    mins_per_checkpoint: float = 30
+    mins_per_checkpoint: float = 10
     num_samples_per_eval: int = 8
     num_epochs: int = 30
     batch_size_eval: int = 128
