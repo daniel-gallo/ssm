@@ -23,6 +23,7 @@ class Hyperparams:
     seed: int = 0
     batch_size: int = 32
     learning_rate: float = 1e-3
+    weight_decay: float = 1e-4
     grad_clip: float = 200
     skip_threshold: float = 1000
     shuffle_before_epoch: bool = True
@@ -48,7 +49,7 @@ class Hyperparams:
 
     @property
     def optimizer(self):
-        return optax.adamw(self.learning_rate)
+        return optax.adamw(self.learning_rate, weight_decay=self.weight_decay)
 
     def logprint(self, *args, **kwargs):
         logprint(self.log_dir, self.id, *args, **kwargs)
