@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 from functools import partial
 from os import path
-from typing import Any, Annotated
+from typing import Annotated, Any
 
 import jax
 import jax.numpy as jnp
@@ -53,12 +53,15 @@ def prepend_to_keys(d, s):
 def clip_grad(H: Hyperparams, g, metrics):
     g_flat, treedef = tree_util.tree_flatten(g)
     norm = jnp.linalg.norm(jnp.array(map(jnp.linalg.norm, g_flat)))
-    clip_coeff = jnp.minimum(H.grad_clip / (norm + 1e-6), 1)
+    clip_coeff = (
+        jnp.minimum(H.grad_clip / (norm + 1e-6), 1) if H.grad_clip else 1
+    )
 
-    if H.skip_threshold:
-        skip = jnp.isnan(metrics["loss"]) | ~(norm < H.skip_threshold)
-    else:
-        skip = jnp.isnan(metrics["loss"])
+    skip = (
+        jnp.isnan(metrics["loss"]) | ~(norm < H.skip_threshold)
+        if H.skip_threshold
+        else jnp.isnan(metrics["loss"])
+    )
     assert jnp.isscalar(skip)
 
     metrics["grad_norm"] = norm
@@ -223,9 +226,9 @@ def log_configuration(H):
 
 def main():
     H = tyro.cli(
-        Annotated[VSSMHyperparams, tyro.conf.subcommand("vssm")] |
-        Annotated[S4Hyperparams, tyro.conf.subcommand("s4")] |
-        Annotated[ARHyperparams, tyro.conf.subcommand("ar")]
+        Annotated[VSSMHyperparams, tyro.conf.subcommand("vssm")]
+        | Annotated[S4Hyperparams, tyro.conf.subcommand("s4")]
+        | Annotated[ARHyperparams, tyro.conf.subcommand("ar")]
     )
     H, data = load_data(H)
     log_configuration(H)
