@@ -1,11 +1,13 @@
+import dataclasses
+
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from einops import rearrange
+from rnn import get_recurrent_block
 from typing_extensions import Union
 
 from hps import Hyperparams
-from rnn import get_recurrent_block
 
 
 def log_likelihood(logits, x):
@@ -32,31 +34,54 @@ def loss_and_metrics(logits, x):
     }
 
 
+@dataclasses.dataclass(frozen=True)
+class ARHyperparams(Hyperparams):
+    pool_temporal: tuple[int, ...] = (4, 4)
+    pool_features: tuple[int, ...] = (2, 2)
+
+    rnn_init_minval: float = 0.4
+    rnn_init_maxval: float = 0.99
+    rnn_norm_input: bool = True
+    rnn_hidden_size: int = 128
+    rnn_out_size: int = 16
+    rnn_pos_embedding: bool = True
+    rnn_block: str = "rglru"
+
+    base_dim: int = 64
+    ff_expand: int = 2
+    rnn_last_scale: float = 0.25
+    rnn_n_layers: int = 4
+
+    scan_implementation: str = "linear_pallas"
+
+    @property
+    def model(self):
+        return ARModel(self)
+
+    @property
+    def sample_prior(self):
+        return ARModel.sample_prior
+
+
 class DownPool(nn.Module):
-    # TODO: add support for padding
-    H: Hyperparams
+    H: ARHyperparams
     input_dim: int
-    pool_scale: Union[int, None] = None
-    pool_features: Union[int, None] = None
+    pool_temporal: int
+    pool_features: int
 
     def setup(self):
-        pool_features = self.pool_features or self.H.pool_features
-        self.linear = nn.Dense(self.input_dim * pool_features)
+        self.linear = nn.Dense(self.input_dim * self.pool_features)
 
     def __call__(self, x):
-        pool_scale = self.pool_scale or self.H.pool_scale
-
         batch_size, seq_len, dim = x.shape
-        x = rearrange(x, "...(l m) d -> ... l (m d)", m=pool_scale)
+        x = rearrange(x, "...(l m) d -> ... l (m d)", m=self.pool_temporal)
         return self.linear(x), None
 
     def step(self, x, state):
-        pool_scale = self.pool_scale or self.H.pool_scale
-
         if x is None:
             return None, state
         state = jnp.concatenate([state, x], axis=1)
-        if state.shape[1] == pool_scale:
+        if state.shape[1] == self.pool_temporal:
             batch_size, seq_len, dim = x.shape
             x = rearrange(state, "... l d -> ... (l d)")
             x = x[:, None, :]
@@ -70,60 +95,55 @@ class DownPool(nn.Module):
 
 
 class UpPool(nn.Module):
-    # TODO: add support for padding
-    H: Hyperparams
+    H: ARHyperparams
     input_dim: int
-    pool_scale: Union[int, None] = None
-    pool_features: Union[int, None] = None
+    pool_temporal: int
+    pool_features: int
 
     def setup(self):
-        pool_scale = self.pool_scale or self.H.pool_scale
-        pool_features = self.pool_features or self.H.pool_features
-
-        assert (self.input_dim * pool_scale) % pool_features == 0
-        self.linear = nn.Dense((self.input_dim * pool_scale) // pool_features)
+        assert (self.input_dim * self.pool_temporal) % self.pool_features == 0
+        self.linear = nn.Dense(
+            (self.input_dim * self.pool_temporal) // self.pool_features
+        )
 
     def __call__(self, x):
-        pool_scale = self.pool_scale or self.H.pool_scale
-
         batch_size, seq_len, dim = x.shape
         x = self.linear(x)
         # ensures causal relationship
         x = jnp.pad(x[:, :-1, :], ((0, 0), (1, 0), (0, 0)))
-        x = rearrange(x, "... l (m d) -> ... (l m) d", m=pool_scale)
+        x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.pool_temporal)
         return x, None
 
     def step(self, x, state):
-        pool_scale = self.pool_scale or self.H.pool_scale
-
         assert len(state) > 0
         y, state = state[:, 0], state[:, 1:]
         if state.shape[1] == 0:
             assert x is not None
             x = self.linear(x)
-            x = rearrange(x, "... l (m d) -> ... (l m) d", m=pool_scale)
+            x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.pool_temporal)
             state = x
         else:
             assert x is None
         return y[:, None, :], state
 
     def default_state(self, batch_size):
-        pool_scale = self.pool_scale or self.H.pool_scale
-        pool_features = self.pool_features or self.H.pool_features
-
         return jnp.zeros(
-            (batch_size, pool_scale, self.input_dim // (pool_features))
+            (
+                batch_size,
+                self.pool_temporal,
+                self.input_dim // (self.pool_features),
+            )
         )
 
 
 class ResBlock(nn.Module):
-    H: Hyperparams
+    H: ARHyperparams
     expand: Union[int, None] = None
 
     @nn.compact
     def __call__(self, x, deterministic=False):
         bs, seq_len, dim = x.shape
-        expand = self.expand or self.H.ar_ff_expand
+        expand = self.expand or self.H.ff_expand
         z = nn.LayerNorm(feature_axes=-1)(x)
         z = nn.Dense(dim * expand)(z)
         z = nn.gelu(z)
@@ -138,7 +158,7 @@ class ResBlock(nn.Module):
 
 
 class RNNBlock(nn.Module):
-    H: Hyperparams
+    H: ARHyperparams
     d_out: int
     bidirectional: bool = False
     residual: bool = False
@@ -167,7 +187,6 @@ class RNNBlock(nn.Module):
         x = self.norm(x)
         x_fwd, h_next = self.forward(x, h_prev)
         x = (x_fwd + self.backward(x)[0]) / 2 if self.bidirectional else x_fwd
-        x = x + identity if self.residual else x
 
         x = nn.gelu(x)
         x = self.last_dense(x)
@@ -182,16 +201,16 @@ class RNNBlock(nn.Module):
 
 
 class ARModel(nn.Module):
-    H: Hyperparams
+    H: ARHyperparams
 
     def setup(self):
-        self.input_mlp = nn.Dense(self.H.ar_base_dim)
+        self.input_mlp = nn.Dense(self.H.base_dim)
         self.cls_mlp = nn.Dense(self.H.data_num_cats)
         self.norm = nn.LayerNorm(feature_axes=-1)
 
         d_layers = []
         model_dim = self.H.ar_base_dim
-        for p, expand in zip(self.H.ar_pool, self.H.ar_expand):
+        for p, expand in zip(self.H.pool_temporal, self.H.pool_features):
             d_layers.append(
                 DownPool(
                     self.H,
@@ -203,19 +222,21 @@ class ARModel(nn.Module):
             model_dim = model_dim * expand
 
         c_layers = []
-        for _ in range(self.H.ar_n_layers):
+        for _ in range(self.H.rnn_n_layers):
             c_layers.append(
                 RNNBlock(
                     self.H,
                     model_dim,
                     residual=True,
-                    last_scale=self.H.ar_last_scale,
+                    last_scale=self.H.rnn_last_scale,
                 )
             )
             c_layers.append(ResBlock(self.H))
 
         u_layers = []
-        for p, expand in zip(self.H.ar_pool[::-1], self.H.ar_expand[::-1]):
+        for p, expand in zip(
+            self.H.pool_temporal[::-1], self.H.pool_features[::-1]
+        ):
             block = []
             block.append(
                 UpPool(
@@ -228,13 +249,13 @@ class ARModel(nn.Module):
 
             model_dim = model_dim // expand
 
-            for _ in range(self.H.ar_n_layers):
+            for _ in range(self.H.rnn_n_layers):
                 block.append(
                     RNNBlock(
                         self.H,
                         model_dim,
                         residual=True,
-                        last_scale=self.H.ar_last_scale,
+                        last_scale=self.H.rnn_last_scale,
                     )
                 )
                 block.append(ResBlock(self.H))
@@ -244,7 +265,7 @@ class ARModel(nn.Module):
         self.c_layers = c_layers
         self.u_layers = u_layers
 
-        assert model_dim == self.H.ar_base_dim
+        assert model_dim == self.H.base_dim
 
     def __call__(self, x, rng=None):
         target = x.copy()
