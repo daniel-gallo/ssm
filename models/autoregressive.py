@@ -209,13 +209,13 @@ class ARModel(nn.Module):
         self.norm = nn.LayerNorm(feature_axes=-1)
 
         d_layers = []
-        model_dim = self.H.ar_base_dim
+        model_dim = self.H.base_dim
         for p, expand in zip(self.H.pool_temporal, self.H.pool_features):
             d_layers.append(
                 DownPool(
                     self.H,
                     model_dim,
-                    pool_scale=p,
+                    pool_temporal=p,
                     pool_features=expand,
                 )
             )
@@ -242,7 +242,7 @@ class ARModel(nn.Module):
                 UpPool(
                     self.H,
                     model_dim,
-                    pool_scale=p,
+                    pool_temporal=p,
                     pool_features=expand,
                 )
             )
