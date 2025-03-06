@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 from functools import partial
 from os import path
-from typing import Any
+from typing import Annotated, Any
 
 import jax
 import jax.numpy as jnp
@@ -20,7 +20,7 @@ from jax.util import safe_map
 
 from data import load_data, save_samples
 from hps import Hyperparams
-from models import S4Hyperparams, VSSMHyperparams
+from models import ARHyperparams, S4Hyperparams, VSSMHyperparams
 
 map = safe_map
 _mesh = jax.make_mesh((jax.device_count(),), ("batch",))
@@ -53,9 +53,15 @@ def prepend_to_keys(d, s):
 def clip_grad(H: Hyperparams, g, metrics):
     g_flat, treedef = tree_util.tree_flatten(g)
     norm = jnp.linalg.norm(jnp.array(map(jnp.linalg.norm, g_flat)))
-    clip_coeff = jnp.minimum(H.grad_clip / (norm + 1e-6), 1)
+    clip_coeff = (
+        jnp.minimum(H.grad_clip / (norm + 1e-6), 1) if H.grad_clip else 1
+    )
 
-    skip = jnp.isnan(metrics["loss"]) | ~(norm < H.skip_threshold)
+    skip = (
+        jnp.isnan(metrics["loss"]) | ~(norm < H.skip_threshold)
+        if H.skip_threshold
+        else jnp.isnan(metrics["loss"])
+    )
     assert jnp.isscalar(skip)
 
     metrics["grad_norm"] = norm
@@ -197,11 +203,11 @@ def train(H: Hyperparams, S: TrainState, data):
                 path.abspath(H.checkpoint_dir), S, S.step, H.checkpoint_prefix
             )
             t_last_checkpoint = time.time()
-        if not e % H.epochs_per_eval:
+        if not (e + 1) % H.epochs_per_eval:
             H.log(S.step, eval(H, S, data_test))
 
-            if H.num_samples_per_eval:
-                generate_samples(H, S)
+        if H.num_samples_per_eval and (not (e + 1) % H.epochs_per_gen):
+            generate_samples(H, S)
 
 
 def log_configuration(H):
@@ -219,7 +225,11 @@ def log_configuration(H):
 
 
 def main():
-    H = tyro.cli(VSSMHyperparams | S4Hyperparams)
+    H = tyro.cli(
+        Annotated[VSSMHyperparams, tyro.conf.subcommand("vssm")]
+        | Annotated[S4Hyperparams, tyro.conf.subcommand("s4")]
+        | Annotated[ARHyperparams, tyro.conf.subcommand("ar")]
+    )
     H, data = load_data(H)
     log_configuration(H)
 

@@ -24,13 +24,14 @@ class Hyperparams:
     batch_size: int = 32
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
-    grad_clip: float = 200
-    skip_threshold: float = 1000
+    grad_clip: Optional[float] = 200
+    skip_threshold: Optional[float] = 1000
     shuffle_before_epoch: bool = True
     enable_wandb: bool = True
     steps_per_print: int = 1000
     epochs_per_eval: int = 1
     mins_per_checkpoint: float = 10
+    epochs_per_gen: int = 50
     num_samples_per_eval: int = 8
     num_epochs: int = 30
     batch_size_eval: int = 128

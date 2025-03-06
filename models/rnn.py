@@ -59,7 +59,7 @@ class RNN(nn.Module):
     reverse: bool = False
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, h_prev=None):
         batch_size, seq_len, _ = x.shape
 
         def stable_init(rng, shape):
@@ -81,15 +81,19 @@ class RNN(nn.Module):
         if self.H.rnn_norm_input:
             x = jnp.sqrt(1 - a**2) * x
         a = jnp.broadcast_to(a, x.shape)
-        h, _ = scan.linear_scan(
+        h, h_last = scan.linear_scan(
             x=x,
             a=a,
+            h0=h_prev,
             reverse=self.reverse,
             scan_type=get_scan_implementation(self.H),
             sharding_spec=SHARDING_SPEC,
             unroll=128,
         )
-        return (dx + nn.Dense(self.d_out)(h)) / 2
+        return (dx + nn.Dense(self.d_out)(h)) / 2, h_last
+
+    def default_state(self, batch_size):
+        return jnp.zeros((batch_size, self.d_hidden))
 
 
 class RGLRU(nn.Module):
@@ -99,7 +103,7 @@ class RGLRU(nn.Module):
     reverse: bool = False
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, h_prev=None):
         # TODO: implement BlockDiagonalLinear from RecurrentGemma
         batch_size, seq_len, _ = x.shape
 
@@ -116,10 +120,8 @@ class RGLRU(nn.Module):
             x = jnp.concatenate(
                 [x, get_sinusoidal_embeddings(batch_size, seq_len, 16)], -1
             )
-        dx = nn.Dense(self.d_out)(x)
         x = nn.Dense(self.d_hidden)(x)
-        if self.H.rnn_norm_input:
-            x = jnp.sqrt(1 - a_expit**2) * x
+
         gate_x = nn.sigmoid(nn.Dense(self.d_hidden)(x))
         gate_a = nn.sigmoid(nn.Dense(self.d_hidden)(x))
 
@@ -127,17 +129,24 @@ class RGLRU(nn.Module):
         a_squared = a**2
 
         x = gate_x * x
-        x = (1 - a_squared) ** 0.5 * x
+        # TODO: placement of norm corresponding to RGLRU
+        # reconsider doing it before gating
+        if self.H.rnn_norm_input:
+            x = jnp.sqrt(1 - a_squared) * x
 
-        h, _ = scan.linear_scan(
+        h, h_last = scan.linear_scan(
             x=x,
             a=a,
+            h0=h_prev,
             reverse=self.reverse,
             scan_type=get_scan_implementation(self.H),
             sharding_spec=SHARDING_SPEC,
             unroll=128,
         )
-        return (dx + nn.Dense(self.d_out)(h)) / 2
+        return nn.Dense(self.d_out)(h), h_last
+
+    def default_state(self, batch_size):
+        return jnp.zeros((batch_size, self.d_hidden))
 
 
 class RNNBlock(nn.Module):
@@ -166,8 +175,8 @@ class RNNBlock(nn.Module):
     def __call__(self, x):
         identity = x
         x = nn.gelu(x)
-        x_fwd = self.forward(x)
-        x = (x_fwd + self.backward(x)) / 2 if self.bidirectional else x_fwd
+        x_fwd, _ = self.forward(x)
+        x = (x_fwd + self.backward(x)[0]) / 2 if self.bidirectional else x_fwd
         x = x + identity if self.residual else x
 
         x = nn.gelu(x)
