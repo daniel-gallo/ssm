@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 from functools import partial
 from os import path
-from typing import Any
+from typing import Any, Annotated
 
 import jax
 import jax.numpy as jnp
@@ -222,7 +222,11 @@ def log_configuration(H):
 
 
 def main():
-    H = tyro.cli(VSSMHyperparams | S4Hyperparams | ARHyperparams)
+    H = tyro.cli(
+        Annotated[VSSMHyperparams, tyro.conf.subcommand("vssm")] |
+        Annotated[S4Hyperparams, tyro.conf.subcommand("s4")] |
+        Annotated[ARHyperparams, tyro.conf.subcommand("ar")]
+    )
     H, data = load_data(H)
     log_configuration(H)
 
