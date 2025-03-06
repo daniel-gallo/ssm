@@ -4,10 +4,10 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from einops import rearrange
-from rnn import get_recurrent_block
 from typing_extensions import Union
 
 from hps import Hyperparams
+from models.rnn import get_recurrent_block
 
 
 def log_likelihood(logits, x):
