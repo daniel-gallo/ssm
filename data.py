@@ -109,6 +109,7 @@ def unzip(H, zip_file: Path, extract_dir: Path):
 
 def wav_to_np(path: Path) -> np.ndarray:
     rate, data = wavfile.read(path)
+    assert rate == 16000
     return data
 
 
