@@ -12,6 +12,7 @@ import flax.linen as nn
 import jax.numpy as jnp
 import numpy as np
 from PIL import Image
+from scipy.io import wavfile
 
 from hps import Hyperparams
 
@@ -107,10 +108,8 @@ def unzip(H, zip_file: Path, extract_dir: Path):
 
 
 def wav_to_np(path: Path) -> np.ndarray:
-    with wave.open(str(path), "rb") as wav_file:
-        n_frames = wav_file.getnframes()
-        signal = wav_file.readframes(n_frames)
-        return np.frombuffer(signal, dtype=np.int16)
+    rate, data = wavfile.read(path)
+    return data
 
 
 def np_to_wav(x: np.ndarray, path: Path):
@@ -129,20 +128,29 @@ def pad(x: List[np.ndarray], seq_len: int) -> np.ndarray:
     return padded_x
 
 
-def mu_law_encode(x):
-    # See https://en.wikipedia.org/wiki/%CE%9C-law_algorithm
-    # [-2**15, 2**15 - 1] -> [0, 1]
-    x = (x.astype(np.float32) + 32_768) / 65_536
-    # [0, 1] -> [-1, 1]
-    x = 2 * x - 1
-    # [-1, 1] -> [-1, 1] (but squeezed)
-    x = np.sign(x) * np.log1p(255 * np.abs(x)) / np.log1p(255)
-    # [-1, 1] -> [0, 1]
-    x = (x + 1) / 2
-    # [0, 1] -> [0, 255]
-    x = 255 * x
-    x = x.astype(np.int32)
-    return x
+def mu_law_encode(audio):
+    # Based on implementation from S4 repo. Audio is assumed to have shape
+    # (batch, length), i.e. single channel.
+    def minmax_scale(x, range_min, range_max):
+        assert x.ndim == 2
+        min_val = np.min(x, axis=1, keepdims=True)
+        max_val = np.max(x, axis=1, keepdims=True)
+        return range_min + (range_max - range_min) * (x - min_val) / (
+            max_val - min_val + 1e-6
+        )
+
+    bits = 8
+    mu = (1 << bits) - 1
+    audio = minmax_scale(audio, range_min=-1, range_max=1)
+
+    numerator = np.log1p(mu * np.abs(audio + 1e-8))
+    denominator = np.log1p(mu)
+    encoded = np.sign(audio) * (numerator / denominator)
+
+    encoded = (encoded + 1) / 2
+
+    quantized = np.int32((256 - 0.01) * encoded + 0.005)
+    return quantized
 
 
 def mu_law_decode(x):
@@ -197,13 +205,10 @@ def load_sc09(H):
         test = []
         H.logprint("Reading SC09 wav files...")
         for track in base_dir.glob("**/*.wav"):
-            label = track.parent.name
-
-            x = train
-            if f"{label}/{track.name}" in test_tracks:
-                x = test
-
-            x.append(wav_to_np(track))
+            if f"{track.parent.name}/{track.name}" in test_tracks:
+                test.append(wav_to_np(track))
+            else:
+                train.append(wav_to_np(track))
 
         train = mu_law_encode(pad(train, seq_len)).astype(np.uint8)
         test = mu_law_encode(pad(test, seq_len)).astype(np.uint8)
@@ -216,7 +221,7 @@ def load_sc09(H):
     test = cache["test"].astype(np.int16)
 
     # Add a dummy channel dim
-    train, test = np.expand_dims(train, -1), np.expand_dims(test, -1)
+    train, test = train[..., np.newaxis], test[..., np.newaxis]
 
     assert train.dtype == test.dtype == np.int16
     assert train.shape == (31158, 16000, 1)
