@@ -155,7 +155,9 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
     for batch in reshape_batches(H.batch_size, data):
         batch = jax.device_put(batch, SHARDING_BATCH)
         S, metrics = train_iter(H, S, batch)
-        H.logtrain(S.step, prepend_to_keys(metrics, "train/"))
+        metrics = prepend_to_keys(metrics, "train/")
+        metrics["lr"] = H.scheduler(S.step)
+        H.logtrain(S.step, metrics)
     return S
 
 

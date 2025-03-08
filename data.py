@@ -32,12 +32,14 @@ def load_data(H: Hyperparams):
 
 
 def load_mnist_binarized(H: Hyperparams):
+    data_num_training_samples = 60_000
     H = dataclasses.replace(
         H,
         data_seq_length=784,
         data_num_channels=1,
         data_num_cats=2,
         data_preprocess_fn=lambda x: 2 * x - 1,
+        data_num_training_samples=data_num_training_samples,
     )
 
     root_dir = path.join(H.data_dir, "mnist-binarized")
@@ -86,7 +88,7 @@ def load_mnist_binarized(H: Hyperparams):
     # Add a dummy channel dim
     train, test = np.expand_dims(train, -1), np.expand_dims(test, -1)
 
-    assert train.shape == (60_000, 784, 1)
+    assert train.shape == (data_num_training_samples, 784, 1)
     assert test.shape == (10_000, 784, 1)
 
     return H, (train, test)
@@ -162,6 +164,7 @@ def mu_law_decode(x):
 
 
 def load_sc09(H):
+    data_num_training_samples = 31158
     seq_len = 16_000
     num_cats = 256
     data_dir = Path(H.data_dir)
@@ -175,6 +178,7 @@ def load_sc09(H):
         data_num_channels=1,
         data_num_cats=num_cats,
         data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+        data_num_training_samples=data_num_training_samples,
     )
 
     maybe_download(
@@ -219,7 +223,7 @@ def load_sc09(H):
     train, test = np.expand_dims(train, -1), np.expand_dims(test, -1)
 
     assert train.dtype == test.dtype == np.int16
-    assert train.shape == (31158, 16000, 1)
+    assert train.shape == (data_num_training_samples, 16000, 1)
     assert test.shape == (7750, 16000, 1)
 
     np.random.RandomState(H.seed).shuffle(train)
@@ -228,6 +232,7 @@ def load_sc09(H):
 
 
 def load_beethoven(H):
+    data_num_training_samples = 3808
     seq_len = 128_000
     num_cats = 256
     data_dir = Path(H.data_dir)
@@ -241,6 +246,7 @@ def load_beethoven(H):
         data_num_channels=1,
         data_num_cats=num_cats,
         data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+        data_num_training_samples=data_num_training_samples,
     )
 
     maybe_download(
@@ -283,6 +289,7 @@ def load_beethoven(H):
 
 
 def load_youtube_mix(H):
+    data_num_training_samples = 212
     seq_len = 960_512
     num_cats = 256
     data_dir = Path(H.data_dir)
@@ -296,6 +303,7 @@ def load_youtube_mix(H):
         data_num_channels=1,
         data_num_cats=num_cats,
         data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+        data_num_training_samples=data_num_training_samples,
     )
 
     maybe_download(
@@ -333,7 +341,7 @@ def load_youtube_mix(H):
     train, test = np.expand_dims(train, -1), np.expand_dims(test, -1)
 
     assert train.dtype == test.dtype == np.int16
-    assert train.shape == (212, seq_len, 1)
+    assert train.shape == (data_num_training_samples, seq_len, 1)
     assert test.shape == (29, seq_len, 1)
 
     return H, (train, test)
