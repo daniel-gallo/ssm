@@ -20,7 +20,12 @@ from jax.util import safe_map
 
 from data import load_data, save_samples
 from hps import Hyperparams
-from models import ARHyperparams, S4Hyperparams, VSSMHyperparams
+from models import (
+    ARHyperparams,
+    DiffusionHyperparams,
+    S4Hyperparams,
+    VSSMHyperparams,
+)
 
 map = safe_map
 _mesh = jax.make_mesh((jax.device_count(),), ("batch",))
@@ -229,6 +234,7 @@ def main():
         Annotated[VSSMHyperparams, tyro.conf.subcommand("vssm")]
         | Annotated[S4Hyperparams, tyro.conf.subcommand("s4")]
         | Annotated[ARHyperparams, tyro.conf.subcommand("ar")]
+        | Annotated[DiffusionHyperparams, tyro.conf.subcommand("diffusion")]
     )
     H, data = load_data(H)
     log_configuration(H)
