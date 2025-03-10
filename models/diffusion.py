@@ -3,9 +3,28 @@ import dataclasses
 import flax.linen as nn
 import jax.numpy as jnp
 from einops import repeat
+from flax.typing import PRNGKey
 from jax import lax, random
+from jax.scipy.special import expit, logit
 
 from hps import Hyperparams
+
+
+@dataclasses.dataclass(frozen=True)
+class DiffusionHyperparams(Hyperparams):
+    x_dim: int = 64
+    t_dim: int = 32
+    pos_emb_dim: int = 32
+    n_layers: int = 4
+    diffusion_timesteps: int = 200
+
+    @property
+    def model(self):
+        return DiffusionModel(self)
+
+    @property
+    def sample_prior(self):
+        return DiffusionModel.sample_prior
 
 
 def get_timestep_embedding(timesteps, d):
@@ -17,10 +36,12 @@ def get_timestep_embedding(timesteps, d):
     embedding = jnp.concatenate([jnp.cos(args), jnp.sin(args)], axis=-1)
     return embedding
 
-
+@dataclasses.dataclass
 class NoiseScheduler(nn.Module):
+    H: DiffusionHyperparams
+
     def setup(self):
-        self.betas = jnp.linspace(1e-4, 0.02, 1000)
+        self.betas = jnp.linspace(1e-4, 0.02, self.H.diffusion_timesteps)
         self.alphas = 1 - self.betas
         self.alphas_bar = jnp.cumprod(self.alphas)
         self.alphas_bar_previous = jnp.pad(
@@ -48,18 +69,40 @@ class NoiseScheduler(nn.Module):
         return x_prev
 
 
+class DiagonalCell(nn.RNNCellBase):
+    @nn.compact
+    def __call__(self, h, x):
+        batch_size, d = x.shape
+
+        def stable_init(rng, shape):
+            return logit(
+                random.uniform(key=rng, shape=shape, minval=0.4, maxval=0.99)
+            )
+
+        log_a = self.param("log_a", stable_init, (d,))
+        a = expit(log_a)
+
+        x = jnp.sqrt(1 - a**2) * x
+        h = a * h + x
+        return (h, h)
+
+    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
+        return jnp.zeros(input_shape)
+
+    @property
+    def num_feature_axes(self) -> int:
+        return 1
+
+
 class RecurrentBlock(nn.Module):
     @nn.compact
     def __call__(self, x):
         bs, seq_len, d = x.shape
 
-        # x = nn.SelfAttention(num_heads=4, qkv_features=d, out_features=d)(x)
-        # TODO: use LinearRNN
-        forward_rnn = nn.recurrent.RNN(nn.recurrent.OptimizedLSTMCell(d))
-        backward_rnn = nn.recurrent.RNN(nn.recurrent.OptimizedLSTMCell(d))
+        forward_rnn = nn.recurrent.RNN(DiagonalCell())
+        backward_rnn = nn.recurrent.RNN(DiagonalCell())
         x = nn.Bidirectional(forward_rnn, backward_rnn)(x)
         x = nn.Dense(d)(x)
-        # x = RNNBlock(Hyperparams(), d, bidirectional=True)(x)
         assert x.shape == (bs, seq_len, d)
         return x
 
@@ -80,22 +123,6 @@ class ResBlock(nn.Module):
             ]
         )(nn.LayerNorm()(x))
         return x
-
-
-@dataclasses.dataclass(frozen=True)
-class DiffusionHyperparams(Hyperparams):
-    x_dim: int = 64
-    t_dim: int = 32
-    pos_emb_dim: int = 32
-    n_layers = 4
-
-    @property
-    def model(self):
-        return DiffusionModel(self)
-
-    @property
-    def sample_prior(self):
-        return DiffusionModel.sample_prior
 
 
 class Backbone(nn.Module):
@@ -133,7 +160,7 @@ class DiffusionModel(nn.Module):
     H: DiffusionHyperparams
 
     def setup(self):
-        self.noise_scheduler = NoiseScheduler()
+        self.noise_scheduler = NoiseScheduler(self.H)
         self.backbone = Backbone(self.H)
 
     def __call__(self, x, rng):
@@ -143,7 +170,7 @@ class DiffusionModel(nn.Module):
         bs, seq_len, num_channels = x.shape
         x_0 = self.H.data_preprocess_fn(x)
 
-        t = random.randint(time_rng, shape=bs, minval=0, maxval=1000)
+        t = random.randint(time_rng, shape=bs, minval=0, maxval=self.H.diffusion_timesteps)
         noise = random.normal(noise_rng, shape=x_0.shape)
         x_t = self.noise_scheduler.add_noise(x_0, noise, t)
 
@@ -168,7 +195,7 @@ class DiffusionModel(nn.Module):
             )
             return (rng, x_t), None
 
-        (rng, x_t), _ = lax.scan(step_fn, (rng, x_t), jnp.arange(999, -1, -1))
+        (rng, x_t), _ = lax.scan(step_fn, (rng, x_t), jnp.arange(self.H.diffusion_timesteps - 1, -1, -1))
 
         # Make x_t [-1, 1] -> [0, 1]
         x_t = x_t / 2 + 0.5
