@@ -36,6 +36,7 @@ def get_timestep_embedding(timesteps, d):
     embedding = jnp.concatenate([jnp.cos(args), jnp.sin(args)], axis=-1)
     return embedding
 
+
 @dataclasses.dataclass
 class NoiseScheduler(nn.Module):
     H: DiffusionHyperparams
@@ -170,7 +171,9 @@ class DiffusionModel(nn.Module):
         bs, seq_len, num_channels = x.shape
         x_0 = self.H.data_preprocess_fn(x)
 
-        t = random.randint(time_rng, shape=bs, minval=0, maxval=self.H.diffusion_timesteps)
+        t = random.randint(
+            time_rng, shape=bs, minval=0, maxval=self.H.diffusion_timesteps
+        )
         noise = random.normal(noise_rng, shape=x_0.shape)
         x_t = self.noise_scheduler.add_noise(x_0, noise, t)
 
@@ -195,7 +198,11 @@ class DiffusionModel(nn.Module):
             )
             return (rng, x_t), None
 
-        (rng, x_t), _ = lax.scan(step_fn, (rng, x_t), jnp.arange(self.H.diffusion_timesteps - 1, -1, -1))
+        (rng, x_t), _ = lax.scan(
+            step_fn,
+            (rng, x_t),
+            jnp.arange(self.H.diffusion_timesteps - 1, -1, -1),
+        )
 
         # Make x_t [-1, 1] -> [0, 1]
         x_t = x_t / 2 + 0.5
