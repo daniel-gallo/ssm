@@ -20,7 +20,12 @@ from jax.util import safe_map
 
 from data import load_data, save_samples
 from hps import Hyperparams
-from models import ARHyperparams, S4Hyperparams, VSSMHyperparams
+from models import (
+    ARHyperparams,
+    DiffusionHyperparams,
+    S4Hyperparams,
+    VSSMHyperparams,
+)
 
 map = safe_map
 _mesh = jax.make_mesh((jax.device_count(),), ("batch",))
@@ -150,7 +155,9 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
     for batch in reshape_batches(H.batch_size, data):
         batch = jax.device_put(batch, SHARDING_BATCH)
         S, metrics = train_iter(H, S, batch)
-        H.logtrain(S.step, prepend_to_keys(metrics, "train/"))
+        metrics = prepend_to_keys(metrics, "train/")
+        metrics["lr"] = H.scheduler(S.step)
+        H.logtrain(S.step, metrics)
     return S
 
 
@@ -229,6 +236,7 @@ def main():
         Annotated[VSSMHyperparams, tyro.conf.subcommand("vssm")]
         | Annotated[S4Hyperparams, tyro.conf.subcommand("s4")]
         | Annotated[ARHyperparams, tyro.conf.subcommand("ar")]
+        | Annotated[DiffusionHyperparams, tyro.conf.subcommand("diffusion")]
     )
     H, data = load_data(H)
     log_configuration(H)

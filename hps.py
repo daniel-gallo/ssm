@@ -1,10 +1,11 @@
 import dataclasses
 from abc import abstractmethod
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 from zlib import adler32
 
 import flax.linen as nn
 import optax
+from optax.schedules import Schedule
 
 from log_util import logprint
 
@@ -23,6 +24,10 @@ class Hyperparams:
     seed: int = 0
     batch_size: int = 32
     learning_rate: float = 1e-3
+    learning_rate_scheduler: Literal["constant", "warmup_cosine_decay"] = (
+        "constant"
+    )
+    learning_rate_warmup_steps: int = 1000
     weight_decay: float = 1e-4
     grad_clip: Optional[float] = 200
     skip_threshold: Optional[float] = 1000
@@ -43,14 +48,32 @@ class Hyperparams:
     data_num_channels: Optional[int] = None
     data_num_cats: Optional[int] = None
     data_preprocess_fn: Optional[Callable] = None
+    data_num_training_samples: Optional[int] = None
 
     @property
     def data_shape(self):
         return self.data_seq_length, self.data_num_channels
 
     @property
+    def scheduler(self) -> Schedule:
+        num_training_steps = (
+            self.data_num_training_samples // self.batch_size * self.num_epochs
+        )
+
+        match self.learning_rate_scheduler:
+            case "constant":
+                return optax.constant_schedule(self.learning_rate)
+            case "warmup_cosine_decay":
+                return optax.warmup_cosine_decay_schedule(
+                    init_value=0,
+                    peak_value=self.learning_rate,
+                    warmup_steps=self.learning_rate_warmup_steps,
+                    decay_steps=num_training_steps,
+                )
+
+    @property
     def optimizer(self):
-        return optax.adamw(self.learning_rate, weight_decay=self.weight_decay)
+        return optax.adamw(self.scheduler, weight_decay=self.weight_decay)
 
     def logprint(self, *args, **kwargs):
         logprint(self.log_dir, self.id, *args, **kwargs)
@@ -84,9 +107,9 @@ class Hyperparams:
                 "data_preprocess_fn",
                 "enable_wandb",
                 "epochs_per_eval",
+                "epochs_per_gen",
                 "log_dir",
                 "mins_per_checkpoint",
-                "num_epochs",
                 "num_samples_per_eval",
                 "sample_dir",
                 "steps_per_print",
