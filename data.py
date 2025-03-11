@@ -18,6 +18,7 @@ from hps import Hyperparams
 
 
 def load_data(H: Hyperparams):
+    os.makedirs(H.data_dir, exist_ok=True)
     match H.dataset:
         case "binarized-mnist":
             H, data = load_mnist_binarized(H)
