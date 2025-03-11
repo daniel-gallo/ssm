@@ -27,6 +27,7 @@ class Hyperparams:
     learning_rate_scheduler: Literal["constant", "warmup_cosine_decay"] = (
         "constant"
     )
+    learning_rate_warmup_steps: int = 1000
     weight_decay: float = 1e-4
     grad_clip: Optional[float] = 200
     skip_threshold: Optional[float] = 1000
@@ -64,9 +65,9 @@ class Hyperparams:
                 return optax.constant_schedule(self.learning_rate)
             case "warmup_cosine_decay":
                 return optax.warmup_cosine_decay_schedule(
-                    init_value=1e-9,
+                    init_value=0,
                     peak_value=self.learning_rate,
-                    warmup_steps=0.1 * num_training_steps,
+                    warmup_steps=self.learning_rate_warmup_steps,
                     decay_steps=num_training_steps,
                 )
 
