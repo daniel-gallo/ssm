@@ -1,8 +1,9 @@
 import dataclasses
+from typing import Tuple
 
 import flax.linen as nn
 import jax.numpy as jnp
-from einops import repeat
+from einops import rearrange, repeat
 from flax.typing import PRNGKey
 from jax import lax, random
 from jax.scipy.special import expit, logit
@@ -12,11 +13,10 @@ from hps import Hyperparams
 
 @dataclasses.dataclass(frozen=True)
 class DiffusionHyperparams(Hyperparams):
-    x_dim: int = 64
+    x_dim: int = 96
     t_dim: int = 32
-    pos_emb_dim: int = 32
-    n_layers: int = 4
-    diffusion_timesteps: int = 200
+    pool_factors: Tuple[int, ...] = (4, 4, 4, 2)
+    diffusion_timesteps: int = 1000
 
     @property
     def model(self):
@@ -100,6 +100,12 @@ class RecurrentBlock(nn.Module):
     def __call__(self, x):
         bs, seq_len, d = x.shape
 
+        pos_embedding = get_timestep_embedding(jnp.arange(seq_len), d)
+        pos_embedding = repeat(
+            pos_embedding, "seq_len d -> bs seq_len d", bs=bs
+        )
+        x = x + pos_embedding
+
         forward_rnn = nn.recurrent.RNN(DiagonalCell())
         backward_rnn = nn.recurrent.RNN(DiagonalCell())
         x = nn.Bidirectional(forward_rnn, backward_rnn)(x)
@@ -126,12 +132,68 @@ class ResBlock(nn.Module):
         return x
 
 
+class DownSample(nn.Module):
+    factor: int
+
+    @nn.compact
+    def __call__(self, x):
+        bs, seq_len, d = x.shape
+        x = rearrange(
+            x, "... (l factor) d -> ... l (factor d) ", factor=self.factor
+        )
+        x = nn.Dense(d)(x)
+        return x
+
+
+class UpSample(nn.Module):
+    factor: int
+
+    @nn.compact
+    def __call__(self, x):
+        bs, seq_len, d = x.shape
+        x = rearrange(
+            x, "... l (factor d) -> ... (l factor) d", factor=self.factor
+        )
+        x = nn.Dense(d)(x)
+        return x
+
+
+class SkipBlock(nn.Module):
+    inner: nn.Module
+    factor: int
+
+    @nn.compact
+    def __call__(self, x):
+        bs, seq_len, d = x.shape
+        x = ResBlock()(x)
+        skip = x
+
+        x = DownSample(self.factor)(x)
+        x = self.inner(x)
+        x = UpSample(self.factor)(x)
+
+        x = nn.Dense(d)(jnp.concatenate([x, skip], axis=-1))
+        x = ResBlock()(x)
+
+        return x
+
+
 class Backbone(nn.Module):
     H: DiffusionHyperparams
 
     @nn.compact
     def __call__(self, x_t, t):
         bs, seq_len, c = x_t.shape
+
+        x_t = nn.Sequential(
+            [
+                nn.Dense(self.H.x_dim),
+                nn.gelu,
+                nn.Dense(self.H.x_dim),
+                nn.gelu,
+                nn.Dense(self.H.x_dim),
+            ]
+        )(x_t)
 
         x_t = nn.Dense(self.H.x_dim)(x_t)
 
@@ -142,18 +204,24 @@ class Backbone(nn.Module):
             t_embedding, "bs d -> bs seq_len d", seq_len=seq_len
         )
 
-        # TODO: we are concatenating pos_embedding, instead of summing it
-        pos_embedding = get_timestep_embedding(
-            jnp.arange(seq_len), self.H.pos_emb_dim
-        )
-        pos_embedding = repeat(
-            pos_embedding, "seq_len d -> bs seq_len d", bs=bs
-        )
+        x = jnp.concatenate([x_t, t_embedding], axis=-1)
 
-        x = jnp.concatenate([x_t, t_embedding, pos_embedding], axis=-1)
-        for _ in range(self.H.n_layers):
-            x = ResBlock()(x)
-        x = nn.Dense(c)(x)
+        # Construct skipblock
+        block = ResBlock()
+        for factor in reversed(self.H.pool_factors):
+            block = SkipBlock(block, factor)
+
+        x = block(x)
+
+        x = nn.Sequential(
+            [
+                nn.Dense(self.H.x_dim),
+                nn.gelu,
+                nn.Dense(self.H.x_dim),
+                nn.gelu,
+                nn.Dense(c),
+            ]
+        )(x)
         return x
 
 
@@ -206,7 +274,7 @@ class DiffusionModel(nn.Module):
 
         # Make x_t [-1, 1] -> [0, 1]
         x_t = x_t / 2 + 0.5
-        x_t = jnp.clip(x_t, 0, 0.99999999)
+        x_t = jnp.clip(x_t, 0, 0.9999)
         # Make x_t contain ints with the class numbers (a bit ugly)
         x_t = x_t * self.H.data_num_cats
         x_t = jnp.floor(x_t).astype(jnp.int32)
