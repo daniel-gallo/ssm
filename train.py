@@ -94,8 +94,6 @@ def load_train_state(H: Hyperparams):
         jnp.zeros((H.batch_size,) + H.data_shape, "int32"),
         random.PRNGKey(0),
     )
-    num_parameters = sum(leaf.size for leaf in tree_leaves(weights))
-    H.logprint(f"Number of parameters: {num_parameters}")
 
     optimizer_state = H.optimizer.init(weights)
     S = TrainState(weights, optimizer_state, 0, rng_train)
@@ -217,7 +215,7 @@ def train(H: Hyperparams, S: TrainState, data):
             generate_samples(H, S)
 
 
-def log_configuration(H):
+def log_configuration(H: Hyperparams, S: TrainState):
     os.makedirs(H.log_dir, exist_ok=True)
     with open(path.join(H.log_dir, H.id + ".yaml"), "w") as f:
         f.write(tyro.to_yaml(H))
@@ -225,8 +223,13 @@ def log_configuration(H):
     if H.enable_wandb:
         import wandb
 
+        config = dataclasses.asdict(H)
+        num_parameters = sum(leaf.size for leaf in tree_leaves(S.weights))
+        H.logprint(f"Number of parameters: {num_parameters}")
+        config["num_parameters"] = num_parameters
+
         wandb.init(
-            config=dataclasses.asdict(H),
+            config=config,
             name=H.id,
         )
 
@@ -239,10 +242,9 @@ def main():
         | Annotated[DiffusionHyperparams, tyro.conf.subcommand("diffusion")]
     )
     H, data = load_data(H)
-    log_configuration(H)
-
     H.logprint("Loading train state")
     S = load_train_state(H)
+    log_configuration(H, S)
     H.logprint("Training", id=H.id)
     train(H, S, data)
     if H.enable_wandb:
