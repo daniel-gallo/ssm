@@ -62,7 +62,11 @@ class Hyperparams:
 
         match self.learning_rate_scheduler:
             case "constant":
-                return optax.constant_schedule(self.learning_rate)
+                return optax.warmup_constant_schedule(
+                    init_value=0,
+                    peak_value=self.learning_rate,
+                    warmup_steps=self.learning_rate_warmup_steps,
+                )
             case "warmup_cosine_decay":
                 return optax.warmup_cosine_decay_schedule(
                     init_value=0,
