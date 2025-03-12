@@ -11,10 +11,9 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import tyro
+from flax.jax_utils import replicate, unreplicate
 from flax.training import checkpoints
-from jax import random, tree_util
-from jax.sharding import NamedSharding
-from jax.sharding import PartitionSpec as P
+from jax import lax, random, tree_util
 from jax.tree_util import tree_leaves
 from jax.util import safe_map
 
@@ -28,16 +27,15 @@ from models import (
 )
 
 map = safe_map
-_mesh = jax.make_mesh((jax.device_count(),), ("batch",))
-SHARDING_REPLICATED = NamedSharding(_mesh, P())
-SHARDING_BATCH = NamedSharding(_mesh, P("batch"))
 
 
 def reshape_batches(batch_size, data):
+    assert batch_size % jax.device_count() == 0
     num_batches = len(data) // batch_size
+    batch_sz_per_device = batch_size // jax.device_count()
     return np.reshape(
         data[: batch_size * num_batches],
-        (num_batches, batch_size) + data.shape[1:],
+        (num_batches, jax.device_count(), batch_sz_per_device) + data.shape[1:],
     )
 
 
@@ -108,13 +106,13 @@ def load_train_state(H: Hyperparams):
         H.logprint(f"Checkpoint restored from {latest_checkpoint_path}")
     else:
         H.logprint("No checkpoint found")
-    S = jax.device_put(S, SHARDING_REPLICATED)
     return S
 
 
-@partial(jax.jit, static_argnums=0)
+@partial(jax.pmap, axis_name="batch", static_broadcasted_argnums=0)
 def train_iter(H: Hyperparams, S: TrainState, batch):
     rng, rng_iter = random.split(S.rng)
+    rng_iter = random.fold_in(rng_iter, lax.axis_index("batch"))
 
     def lossfun(weights):
         # TODO: use JAX rng instead of FLAX (temporary fix for the S4 code)
@@ -124,6 +122,9 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
 
     gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
     gradval, skip, metrics = clip_grad(H, gradval, metrics)
+
+    gradval, metrics = lax.pmean((gradval, metrics), "batch")
+    skip = lax.pmax(skip, "batch")
 
     updates, optimizer_state_new = H.optimizer.update(
         gradval, S.optimizer_state, S.weights
@@ -141,42 +142,39 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
 
 
 def train_epoch(H: Hyperparams, S: TrainState, data):
+    S = replicate(S)
     early_logsteps = set(2**e for e in range(12))
 
     def should_log(step):
         return int(step) in early_logsteps or not step % H.steps_per_print
 
-    if H.shuffle_before_epoch:
-        rng, rng_shuffle = random.split(S.rng)
-        S = dataclasses.replace(S, rng=rng)
-        data = random.permutation(rng_shuffle, data)
     for batch in reshape_batches(H.batch_size, data):
-        batch = jax.device_put(batch, SHARDING_BATCH)
         S, metrics = train_iter(H, S, batch)
-        metrics = prepend_to_keys(metrics, "train/")
-        metrics["lr"] = H.scheduler(S.step)
-        H.logtrain(S.step, metrics)
-    return S
+        metrics = prepend_to_keys(unreplicate(metrics), "train/")
+        metrics["lr"] = H.scheduler(unreplicate(S.step))
+        H.logtrain(unreplicate(S.step), metrics)
+    return unreplicate(S)
 
 
-@partial(jax.jit, static_argnums=0)
+@partial(jax.pmap, axis_name="batch", static_broadcasted_argnums=0)
 def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
     # TODO: use JAX rng instead of FLAX (temporary fix for the S4 code)
     _, metrics = H.model.apply(
         S.weights, batch, rng_iter, rngs={"dropout": rng_iter}
     )
-    return metrics
+    return lax.pmean(metrics, "batch")
 
 
 def eval(H: Hyperparams, S: TrainState, data):
     # TODO: don't skip last batch
+    S = replicate(S)
     # We don't care too much about reproducibility here:
     rng = random.PRNGKey(int(time.time()))
     metrics = []
     for batch in reshape_batches(H.batch_size_eval, data):
         rng, rng_iter = random.split(rng)
-        batch = jax.device_put(batch, SHARDING_BATCH)
-        metrics.append(eval_iter(H, S, rng_iter, batch))
+        rng_iter = random.split(rng_iter, jax.device_count())
+        metrics.append(unreplicate(eval_iter(H, S, rng_iter, batch)))
     return prepend_to_keys(accum_metrics(metrics), "eval/")
 
 
