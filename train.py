@@ -120,11 +120,10 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
             weights, batch, rng_iter, rngs={"dropout": rng_iter}
         )
 
-    gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
-    gradval, skip, metrics = clip_grad(H, gradval, metrics)
+    gradval, metrics = lax.pmean(jax.grad(lossfun, has_aux=True)(S.weights),
+                                 "batch")
 
-    gradval, metrics = lax.pmean((gradval, metrics), "batch")
-    skip = lax.pmax(skip, "batch")
+    gradval, skip, metrics = clip_grad(H, gradval, metrics)
 
     updates, optimizer_state_new = H.optimizer.update(
         gradval, S.optimizer_state, S.weights
