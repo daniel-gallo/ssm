@@ -142,12 +142,17 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
 
 
 def train_epoch(H: Hyperparams, S: TrainState, data):
-    S = replicate(S)
     early_logsteps = set(2**e for e in range(12))
 
     def should_log(step):
         return int(step) in early_logsteps or not step % H.steps_per_print
 
+    if H.shuffle_before_epoch:
+        rng, rng_shuffle = random.split(S.rng)
+        S = dataclasses.replace(S, rng=rng)
+        data = random.permutation(rng_shuffle, data)
+
+    S = replicate(S)
     for batch in reshape_batches(H.batch_size, data):
         S, metrics = train_iter(H, S, batch)
         metrics = prepend_to_keys(unreplicate(metrics), "train/")

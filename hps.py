@@ -31,6 +31,7 @@ class Hyperparams:
     weight_decay: float = 1e-4
     grad_clip: Optional[float] = 200
     skip_threshold: Optional[float] = 1000
+    shuffle_before_epoch: bool = True
     enable_wandb: bool = True
     steps_per_print: int = 1000
     epochs_per_eval: int = 1
