@@ -15,6 +15,7 @@ class DiffusionHyperparams(Hyperparams):
     x_dim: int = 96
     t_dim: int = 32
     pool_factors: Tuple[int, ...] = (2, 2)
+    patch_size: int = 1
     diffusion_timesteps: int = 1000
 
     rnn_block: str = "rglru"
@@ -149,9 +150,25 @@ class SkipBlock(nn.Module):
 class Backbone(nn.Module):
     H: DiffusionHyperparams
 
+    def tokenize(self, x):
+        return rearrange(
+            x,
+            "bs (new_seq_len patch) c -> bs new_seq_len (c patch)",
+            patch=self.H.patch_size
+        )
+
+    def untokenize(self, x):
+        return rearrange(
+            x,
+            "bs new_seq_len (c patch) -> bs (new_seq_len patch) c",
+            patch=self.H.patch_size
+        )
+
+
     @nn.compact
     def __call__(self, x_t, t):
-        bs, seq_len, c = x_t.shape
+        x_t = self.tokenize(x_t)
+        bs, seq_len, d = x_t.shape
 
         x_t = nn.Sequential(
             [
@@ -162,8 +179,6 @@ class Backbone(nn.Module):
                 nn.Dense(self.H.x_dim),
             ]
         )(x_t)
-
-        x_t = nn.Dense(self.H.x_dim)(x_t)
 
         # TODO: t_embedding is being passed to every token,
         # unlike UViT for example (but they have attention, ofc)
@@ -187,9 +202,10 @@ class Backbone(nn.Module):
                 nn.gelu,
                 nn.Dense(self.H.x_dim),
                 nn.gelu,
-                nn.Dense(c),
+                nn.Dense(d),
             ]
         )(x)
+        x = self.untokenize(x)
         return x
 
 
