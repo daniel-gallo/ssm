@@ -4,19 +4,26 @@ from typing import Tuple
 import flax.linen as nn
 import jax.numpy as jnp
 from einops import rearrange, repeat
-from flax.typing import PRNGKey
 from jax import lax, random
-from jax.scipy.special import expit, logit
 
 from hps import Hyperparams
+from models.rnn import RNNBlock
 
 
 @dataclasses.dataclass(frozen=True)
 class DiffusionHyperparams(Hyperparams):
     x_dim: int = 96
     t_dim: int = 32
-    pool_factors: Tuple[int, ...] = (4, 4, 4, 2)
+    pool_factors: Tuple[int, ...] = (2, 2)
     diffusion_timesteps: int = 1000
+
+    rnn_block: str = "rglru"
+    rnn_init_minval: float = 0.9
+    rnn_init_maxval: float = 0.99
+    rnn_norm_input: bool = True
+    rnn_pos_embedding: bool = True
+    rnn_hidden_size: int = 128
+    scan_implementation: str = "linear_pallas"
 
     @property
     def model(self):
@@ -70,56 +77,16 @@ class NoiseScheduler(nn.Module):
         return x_prev
 
 
-class DiagonalCell(nn.RNNCellBase):
-    @nn.compact
-    def __call__(self, h, x):
-        batch_size, d = x.shape
-
-        def stable_init(rng, shape):
-            return logit(
-                random.uniform(key=rng, shape=shape, minval=0.4, maxval=0.99)
-            )
-
-        log_a = self.param("log_a", stable_init, (d,))
-        a = expit(log_a)
-
-        x = jnp.sqrt(1 - a**2) * x
-        h = a * h + x
-        return (h, h)
-
-    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
-        return jnp.zeros(input_shape)
-
-    @property
-    def num_feature_axes(self) -> int:
-        return 1
-
-
-class RecurrentBlock(nn.Module):
-    @nn.compact
-    def __call__(self, x):
-        bs, seq_len, d = x.shape
-
-        pos_embedding = get_timestep_embedding(jnp.arange(seq_len), d)
-        pos_embedding = repeat(
-            pos_embedding, "seq_len d -> bs seq_len d", bs=bs
-        )
-        x = x + pos_embedding
-
-        forward_rnn = nn.recurrent.RNN(DiagonalCell())
-        backward_rnn = nn.recurrent.RNN(DiagonalCell())
-        x = nn.Bidirectional(forward_rnn, backward_rnn)(x)
-        x = nn.Dense(d)(x)
-        assert x.shape == (bs, seq_len, d)
-        return x
-
-
 class ResBlock(nn.Module):
+    H: DiffusionHyperparams
+
     @nn.compact
     def __call__(self, x):
         bs, seq_len, d = x.shape
         # Temporal module
-        x = x + RecurrentBlock()(nn.LayerNorm()(x))
+        x = x + RNNBlock(H=self.H, d_out=d, bidirectional=True, residual=False)(
+            nn.LayerNorm()(x)
+        )
 
         # MLP module
         x = x + nn.Sequential(
@@ -159,13 +126,14 @@ class UpSample(nn.Module):
 
 
 class SkipBlock(nn.Module):
+    H: DiffusionHyperparams
     inner: nn.Module
     factor: int
 
     @nn.compact
     def __call__(self, x):
         bs, seq_len, d = x.shape
-        x = ResBlock()(x)
+        x = ResBlock(self.H)(x)
         skip = x
 
         x = DownSample(self.factor)(x)
@@ -173,7 +141,7 @@ class SkipBlock(nn.Module):
         x = UpSample(self.factor)(x)
 
         x = nn.Dense(d)(jnp.concatenate([x, skip], axis=-1))
-        x = ResBlock()(x)
+        x = ResBlock(self.H)(x)
 
         return x
 
@@ -207,9 +175,9 @@ class Backbone(nn.Module):
         x = jnp.concatenate([x_t, t_embedding], axis=-1)
 
         # Construct skipblock
-        block = ResBlock()
+        block = ResBlock(self.H)
         for factor in reversed(self.H.pool_factors):
-            block = SkipBlock(block, factor)
+            block = SkipBlock(self.H, block, factor)
 
         x = block(x)
 
