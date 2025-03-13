@@ -39,7 +39,7 @@ class ARHyperparams(Hyperparams):
     pool_temporal: tuple[int, ...] = (4, 4)
     pool_features: tuple[int, ...] = (2, 2)
 
-    rnn_init_minval: float = 0.4
+    rnn_init_minval: float = 0.9
     rnn_init_maxval: float = 0.99
     rnn_norm_input: bool = True
     rnn_hidden_size: int = 128
@@ -47,10 +47,12 @@ class ARHyperparams(Hyperparams):
     rnn_pos_embedding: bool = True
     rnn_block: str = "rglru"
 
+    rnn_n_diag_blocks: int = 32
+
     base_dim: int = 64
     ff_expand: int = 2
     rnn_last_scale: float = 0.25
-    rnn_n_layers: int = 4
+    rnn_n_layers: int = 8
 
     scan_implementation: str = "linear_pallas"
 

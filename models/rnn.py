@@ -1,9 +1,11 @@
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from typing import Union
 from jax.scipy.special import expit, logit
 
 from hps import Hyperparams
+import einops
 from models.efficient_scan import common, pallas, scan
 
 # TODO: probably should be passed in train.py
@@ -50,6 +52,39 @@ def get_sinusoidal_embeddings(batch_size, seq_len, dim):
 
     # TODO: find less hacky alternative to dividing by 10 here:
     return jnp.broadcast_to(pe, (batch_size, seq_len, dim)) / 10
+
+
+class BlockDiagonalLinear(nn.Module):
+    n_blocks: int
+    d_input: int
+    d_output: Union[int, None] = None
+
+    def setup(self):
+        assert self.d_input % self.n_blocks == 0, "d_input must be divisible by n_blocks"
+        assert self.d_output is None or self.d_output % self.n_blocks == 0, "d_output must be divisible by n_blocks"
+
+        d_in = self.d_input // self.n_blocks
+        d_out = (self.d_output or self.d_input) // self.n_blocks
+        self.W = self.param(
+            "W",
+            lecun_normal(1.0),
+            (self.n_blocks, d_in, d_out)
+        )
+        self.b = self.param(
+            "b",
+            lecun_normal(1.0),
+            (self.n_blocks, d_out)
+        )
+
+    def __call__(self, x):
+        # Split x to blocks.
+        x = einops.rearrange(x, "... (h i) -> ... h i", h=self.n_blocks)
+
+        # Linear layer over each block + bias.
+        y = jnp.einsum("... h i, h i j -> ... h j", x, self.W) + self.b
+
+        # Flatten the output.
+        return einops.rearrange(y, "... h j -> ... (h j)", h=self.n_blocks)
 
 
 class RNN(nn.Module):
@@ -103,9 +138,9 @@ class RGLRU(nn.Module):
     reverse: bool = False
 
     @nn.compact
-    def __call__(self, x, h_prev=None):
+    def __call__(self, x, h_prev=None, pos_emb=None):
         # TODO: implement BlockDiagonalLinear from RecurrentGemma
-        batch_size, seq_len, _ = x.shape
+        batch_size, seq_len, d_in = x.shape
 
         def stable_init(rng, shape):
             r_min, r_max = self.H.rnn_init_minval, self.H.rnn_init_maxval
@@ -117,13 +152,25 @@ class RGLRU(nn.Module):
         a_logit = self.param("a_logit", stable_init, (self.d_hidden,))
         a_expit = expit(a_logit)
         if self.H.rnn_pos_embedding:
+            if pos_emb is None:
+                pos_emb = get_sinusoidal_embeddings(batch_size, seq_len, 16)
             x = jnp.concatenate(
-                [x, get_sinusoidal_embeddings(batch_size, seq_len, 16)], -1
+                [x, pos_emb], -1
             )
         x = nn.Dense(self.d_hidden)(x)
 
-        gate_x = nn.sigmoid(nn.Dense(self.d_hidden)(x))
-        gate_a = nn.sigmoid(nn.Dense(self.d_hidden)(x))
+        gate_x = nn.sigmoid(
+            BlockDiagonalLinear(
+                n_blocks=self.H.rnn_n_diag_blocks,
+                d_input=self.d_hidden
+            )(x)
+        )
+        gate_a = nn.sigmoid(
+            BlockDiagonalLinear(
+                n_blocks=self.H.rnn_n_diag_blocks,
+                d_input=self.d_hidden
+            )(x)
+        )
 
         a = gate_a * a_expit
         a_squared = a**2
@@ -171,13 +218,14 @@ class RNNBlock(nn.Module):
                 reverse=True,
             )
         self.last_dense = nn.Dense(self.d_out)
+        self.norm = nn.LayerNorm()
 
     def __call__(self, x):
         identity = x
-        x = nn.gelu(x)
+        x = nn.norm(x)
         x_fwd, _ = self.forward(x)
         x = (x_fwd + self.backward(x)[0]) / 2 if self.bidirectional else x_fwd
-        x = x + identity if self.residual else x
+        #x = x + identity if self.residual else x
 
         x = nn.gelu(x)
         x = self.last_dense(x)
