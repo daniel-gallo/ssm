@@ -227,6 +227,7 @@ def log_configuration(H: Hyperparams, S: TrainState):
         num_parameters = sum(leaf.size for leaf in tree_leaves(S.weights))
         H.logprint(f"Number of parameters: {num_parameters}")
         config["num_parameters"] = num_parameters
+        config["model"] = H.model.__class__.__name__
 
         wandb.init(
             config=config,
