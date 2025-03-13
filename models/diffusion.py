@@ -170,15 +170,7 @@ class Backbone(nn.Module):
         x_t = self.tokenize(x_t)
         bs, seq_len, d = x_t.shape
 
-        x_t = nn.Sequential(
-            [
-                nn.Dense(self.H.x_dim),
-                nn.gelu,
-                nn.Dense(self.H.x_dim),
-                nn.gelu,
-                nn.Dense(self.H.x_dim),
-            ]
-        )(x_t)
+        x_t = nn.Dense(self.H.x_dim)(x_t)
 
         # TODO: t_embedding is being passed to every token,
         # unlike UViT for example (but they have attention, ofc)
@@ -196,16 +188,9 @@ class Backbone(nn.Module):
 
         x = block(x)
 
-        x = nn.Sequential(
-            [
-                nn.Dense(self.H.x_dim),
-                nn.gelu,
-                nn.Dense(self.H.x_dim),
-                nn.gelu,
-                nn.Dense(d),
-            ]
-        )(x)
+        x = nn.Dense(d)(x)
         x = self.untokenize(x)
+        x = nn.Conv(features=1, kernel_size=3, padding="SAME")(x)
         return x
 
 
