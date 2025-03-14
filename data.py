@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import List
 from urllib.request import urlretrieve
 
-import flax.linen as nn
 import jax.numpy as jnp
 import numpy as np
 from PIL import Image
@@ -376,9 +375,7 @@ def save_mnist_binarized(H: Hyperparams, step, samples):
     samples = jnp.reshape(samples, (batch_size, 28, 28))
     samples = jnp.repeat(samples, 4, 1)
     samples = jnp.repeat(samples, 4, 2)
-    samples = jnp.astype(
-        255 * jnp.hstack(samples), "uint8"
-    )
+    samples = jnp.astype(255 * jnp.hstack(samples), "uint8")
     samples = Image.fromarray(np.array(samples), mode="L")
     samples.save(sample_dir / f"step-{step}.png")
     if H.enable_wandb:

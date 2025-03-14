@@ -2,10 +2,9 @@ import dataclasses
 
 import flax.linen as nn
 import jax
-from jax import lax
 import jax.numpy as jnp
-from jax import random
 from einops import rearrange
+from jax import lax, random
 from typing_extensions import Union
 
 from hps import Hyperparams
@@ -262,8 +261,10 @@ class ARModel(nn.Module):
         return loss_and_metrics(self.evaluate(x), x)
 
     def sample_prior(self, gen_len, n_samples, rng, data_preprocess_fn=None):
-        x = jnp.zeros((n_samples, gen_len, self.H.data_num_channels), 'int32')
+        x = jnp.zeros((n_samples, gen_len, self.H.data_num_channels), "int32")
+
         def fix_point(i, x):
             return random.categorical(rng, self.evaluate(x), -1)
+
         x = lax.fori_loop(0, gen_len, fix_point, x).block_until_ready()
         return x
