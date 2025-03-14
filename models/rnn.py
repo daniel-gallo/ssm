@@ -222,12 +222,12 @@ class RNNBlock(nn.Module):
 
     def __call__(self, x):
         identity = x
-        x = nn.norm(x)
+        x = self.norm(x)
         x_fwd, _ = self.forward(x)
         x = (x_fwd + self.backward(x)[0]) / 2 if self.bidirectional else x_fwd
         #x = x + identity if self.residual else x
 
         x = nn.gelu(x)
-        x = self.last_dense(x)
+        x = self.last_dense(x) * self.last_scale
         x = x + identity if self.residual else x
-        return self.last_scale * x
+        return x

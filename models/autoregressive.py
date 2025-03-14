@@ -42,17 +42,17 @@ class ARHyperparams(Hyperparams):
     rnn_init_minval: float = 0.9
     rnn_init_maxval: float = 0.99
     rnn_norm_input: bool = True
-    rnn_hidden_size: int = 128
+    rnn_hidden_size: int = 256
     rnn_out_size: int = 16
     rnn_pos_embedding: bool = True
     rnn_block: str = "rglru"
 
-    rnn_n_diag_blocks: int = 32
+    rnn_n_diag_blocks: int = 64
 
     base_dim: int = 64
     ff_expand: int = 2
     rnn_last_scale: float = 0.25
-    rnn_n_layers: int = 8
+    rnn_n_layers: int = 4
 
     scan_implementation: str = "linear_pallas"
 
@@ -141,6 +141,7 @@ class UpPool(nn.Module):
 class ResBlock(nn.Module):
     H: ARHyperparams
     expand: Union[int, None] = None
+    last_scale: float = 1.0
 
     @nn.compact
     def __call__(self, x, deterministic=False):
@@ -150,6 +151,7 @@ class ResBlock(nn.Module):
         z = nn.Dense(dim * expand)(z)
         z = nn.gelu(z)
         z = nn.Dense(dim)(z)
+        z = z * self.last_scale
         return x + z, None
 
     def step(self, x, state):
@@ -191,9 +193,9 @@ class RNNBlock(nn.Module):
         x = (x_fwd + self.backward(x)[0]) / 2 if self.bidirectional else x_fwd
 
         x = nn.gelu(x)
-        x = self.last_dense(x)
+        x = self.last_dense(x) * self.last_scale
         x = x + identity if self.residual else x
-        return self.last_scale * x, h_next
+        return x, h_next
 
     def step(self, x, state):
         return self(x, h_prev=state)
@@ -233,7 +235,7 @@ class ARModel(nn.Module):
                     last_scale=self.H.rnn_last_scale,
                 )
             )
-            c_layers.append(ResBlock(self.H))
+            c_layers.append(ResBlock(self.H, last_scale=self.H.rnn_last_scale))
 
         u_layers = []
         for p, expand in zip(
@@ -260,7 +262,7 @@ class ARModel(nn.Module):
                         last_scale=self.H.rnn_last_scale,
                     )
                 )
-                block.append(ResBlock(self.H))
+                block.append(ResBlock(self.H, last_scale=self.H.rnn_last_scale))
             u_layers.append(block)
 
         self.d_layers = d_layers
