@@ -4,6 +4,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from einops import rearrange
+from jax import lax, random
 from typing_extensions import Union
 
 from hps import Hyperparams
@@ -77,22 +78,6 @@ class DownPool(nn.Module):
         x = rearrange(x, "...(l m) d -> ... l (m d)", m=self.pool_temporal)
         return self.linear(x), None
 
-    def step(self, x, state):
-        if x is None:
-            return None, state
-        state = jnp.concatenate([state, x], axis=1)
-        if state.shape[1] == self.pool_temporal:
-            batch_size, seq_len, dim = x.shape
-            x = rearrange(state, "... l d -> ... (l d)")
-            x = x[:, None, :]
-            x = self.linear(x)
-            return x, jnp.zeros((batch_size, 0, dim))
-        else:
-            return None, state
-
-    def default_state(self, batch_size):
-        return jnp.zeros((batch_size, 0, self.input_dim))
-
 
 class UpPool(nn.Module):
     H: ARHyperparams
@@ -114,27 +99,6 @@ class UpPool(nn.Module):
         x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.pool_temporal)
         return x, None
 
-    def step(self, x, state):
-        assert len(state) > 0
-        y, state = state[:, 0], state[:, 1:]
-        if state.shape[1] == 0:
-            assert x is not None
-            x = self.linear(x)
-            x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.pool_temporal)
-            state = x
-        else:
-            assert x is None
-        return y[:, None, :], state
-
-    def default_state(self, batch_size):
-        return jnp.zeros(
-            (
-                batch_size,
-                self.pool_temporal,
-                self.input_dim // (self.pool_features),
-            )
-        )
-
 
 class ResBlock(nn.Module):
     H: ARHyperparams
@@ -149,12 +113,6 @@ class ResBlock(nn.Module):
         z = nn.gelu(z)
         z = nn.Dense(dim)(z)
         return x + z, None
-
-    def step(self, x, state):
-        return self(x)
-
-    def default_state(self, batch_size):
-        return None
 
 
 class RNNBlock(nn.Module):
@@ -192,12 +150,6 @@ class RNNBlock(nn.Module):
         x = self.last_dense(x)
         x = x + identity if self.residual else x
         return self.last_scale * x, h_next
-
-    def step(self, x, state):
-        return self(x, h_prev=state)
-
-    def default_state(self, batch_size):
-        return self.forward.default_state(batch_size)
 
 
 class ARModel(nn.Module):
@@ -267,8 +219,7 @@ class ARModel(nn.Module):
 
         assert model_dim == self.H.base_dim
 
-    def __call__(self, x, rng=None):
-        target = x.copy()
+    def evaluate(self, x):
         batch_size, seq_len, _ = x.shape
 
         x = self.H.data_preprocess_fn(x)
@@ -303,69 +254,16 @@ class ARModel(nn.Module):
                 self.H.data_num_cats,
             ),
         )
-        return loss_and_metrics(x, target)
 
-    def default_state(self, batch_size):
-        layers = (
-            list(self.d_layers)
-            + list(self.c_layers)
-            + [layer for block in self.u_layers for layer in block]
-        )
-        return [layer.default_state(batch_size) for layer in layers]
+        return x
 
-    def step(self, x, state):
-        state = state[::-1]
-
-        x = self.input_mlp(x)
-
-        outputs = []
-        next_state = []
-        for layer in self.d_layers:
-            outputs.append(x)
-            x, _next_state = layer.step(x, state.pop())
-            next_state.append(_next_state)
-            if x is None:
-                break
-
-        if x is None:
-            skipped = len(self.d_layers) - len(outputs)
-            for _ in range(skipped + len(self.c_layers)):
-                next_state.append(state.pop())
-            for i in range(skipped):
-                for _ in range(len(self.u_layers[i])):
-                    next_state.append(state.pop())
-            u_layers = list(self.u_layers)[skipped:]
-        else:
-            outputs.append(x)
-            for layer in self.c_layers:
-                x, _next_state = layer.step(x, state.pop())
-                next_state.append(_next_state)
-            x = x + outputs.pop()
-            u_layers = self.u_layers
-
-        for block in u_layers:
-            for layer in block:
-                x, _next_state = layer.step(x, state.pop())
-                next_state.append(_next_state)
-                if isinstance(layer, UpPool):
-                    x = x + outputs.pop()
-                    outputs.append(x)
-            x = x + outputs.pop()
-
-        x = self.cls_mlp(x)
-
-        return x, next_state
+    def __call__(self, x, rng=None):
+        return loss_and_metrics(self.evaluate(x), x)
 
     def sample_prior(self, gen_len, n_samples, rng, data_preprocess_fn=None):
-        state = self.default_state(n_samples)
-        x = jnp.zeros((n_samples, 1, self.H.data_num_channels))
+        x = jnp.zeros((n_samples, gen_len, self.H.data_num_channels), "int32")
 
-        output = []
-        for _ in range(gen_len):
-            iter_rng, rng = jax.random.split(rng)
-            x, state = self.step(x, state)
-            x = jax.random.categorical(iter_rng, x, axis=-1)
-            output.append(jax.nn.one_hot(x, num_classes=self.H.data_num_cats))
-            x = self.H.data_preprocess_fn(x[..., None])
+        def fix_point(i, x):
+            return random.categorical(rng, self.evaluate(x), -1)
 
-        return jnp.concatenate(output, axis=1)
+        return lax.fori_loop(0, gen_len, fix_point, x)

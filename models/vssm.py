@@ -248,8 +248,16 @@ class Decoder(nn.Module):
         for block in self.blocks:
             rng, block_rng = random.split(rng)
             x = block.sample_prior(x, block_rng)
-        x = self.final(x)
-        return x
+        x = jnp.reshape(
+            self.final(x),
+            (
+                n_samples,
+                gen_len,
+                self.H.data_num_channels,
+                self.H.data_num_cats,
+            ),
+        )
+        return random.categorical(rng, x, -1)
 
 
 class Encoder(nn.Module):
