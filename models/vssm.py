@@ -49,21 +49,23 @@ def loss_and_metrics(logits, kls, x):
 
 @dataclasses.dataclass(frozen=True)
 class VSSMHyperparams(Hyperparams):
-    encoder_rnn_layers: tuple[int, ...] = (2, 2)
-    decoder_rnn_layers: tuple[int, ...] = (2, 2)
+    encoder_rnn_layers: tuple[int, ...] = (2, 2, 2)
+    decoder_rnn_layers: tuple[int, ...] = (3, 3, 3)
 
-    zdim: int = 8
+    zdim: int = 32
 
-    pool_scale: int = 28
+    pool_scale: int = 4
     pool_features: int = 2
 
-    rnn_init_minval: float = 0.4
+    rnn_init_minval: float = 0.9
     rnn_init_maxval: float = 0.99
     rnn_norm_input: bool = True
-    rnn_hidden_size: int = 128
-    rnn_out_size: int = 16
+    rnn_hidden_size: int = 256
+    rnn_out_size: int = 64
     rnn_pos_embedding: bool = True
-    rnn_block: str = "rnn"
+    rnn_block: str = "rglru"
+
+    rnn_n_diag_blocks: int = 64
 
     scan_implementation: str = "linear_pallas"
 
@@ -138,7 +140,8 @@ class DecoderBlock(nn.Module):
             last_scale=1.0 / np.sqrt(self.n_layers),
         )
         self.z_proj = nn.Dense(
-            out_size, kernel_init=lecun_normal(1 / np.sqrt(self.n_layers))
+            # out_size, kernel_init=lecun_normal(1 / np.sqrt(self.n_layers))
+            out_size, kernel_init=lecun_normal(1.0)
         )
         if self.up_pool:
             self.up_pool_ = UpPool(self.H)
