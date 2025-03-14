@@ -260,7 +260,7 @@ class ARModel(nn.Module):
     def __call__(self, x, rng=None):
         return loss_and_metrics(self.evaluate(x), x)
 
-    def sample_prior(self, gen_len, n_samples, rng, data_preprocess_fn=None):
+    def sample_prior(self, gen_len, n_samples, rng):
         x = jnp.zeros((n_samples, gen_len, self.H.data_num_channels), "int32")
 
         def fix_point(i, x):
