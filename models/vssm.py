@@ -141,7 +141,8 @@ class DecoderBlock(nn.Module):
         )
         self.z_proj = nn.Dense(
             # out_size, kernel_init=lecun_normal(1 / np.sqrt(self.n_layers))
-            out_size, kernel_init=lecun_normal(1.0)
+            out_size,
+            kernel_init=lecun_normal(1.0),
         )
         if self.up_pool:
             self.up_pool_ = UpPool(self.H)

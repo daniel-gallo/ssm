@@ -1,11 +1,12 @@
+from typing import Union
+
+import einops
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from typing import Union
 from jax.scipy.special import expit, logit
 
 from hps import Hyperparams
-import einops
 from models.efficient_scan import common, pallas, scan
 
 # TODO: probably should be passed in train.py
@@ -60,21 +61,19 @@ class BlockDiagonalLinear(nn.Module):
     d_output: Union[int, None] = None
 
     def setup(self):
-        assert self.d_input % self.n_blocks == 0, "d_input must be divisible by n_blocks"
-        assert self.d_output is None or self.d_output % self.n_blocks == 0, "d_output must be divisible by n_blocks"
+        assert self.d_input % self.n_blocks == 0, (
+            "d_input must be divisible by n_blocks"
+        )
+        assert self.d_output is None or self.d_output % self.n_blocks == 0, (
+            "d_output must be divisible by n_blocks"
+        )
 
         d_in = self.d_input // self.n_blocks
         d_out = (self.d_output or self.d_input) // self.n_blocks
         self.W = self.param(
-            "W",
-            lecun_normal(1.0),
-            (self.n_blocks, d_in, d_out)
+            "W", lecun_normal(1.0), (self.n_blocks, d_in, d_out)
         )
-        self.b = self.param(
-            "b",
-            lecun_normal(1.0),
-            (self.n_blocks, d_out)
-        )
+        self.b = self.param("b", lecun_normal(1.0), (self.n_blocks, d_out))
 
     def __call__(self, x):
         # Split x to blocks.
@@ -154,21 +153,17 @@ class RGLRU(nn.Module):
         if self.H.rnn_pos_embedding:
             if pos_emb is None:
                 pos_emb = get_sinusoidal_embeddings(batch_size, seq_len, 16)
-            x = jnp.concatenate(
-                [x, pos_emb], -1
-            )
+            x = jnp.concatenate([x, pos_emb], -1)
         x = nn.Dense(self.d_hidden)(x)
 
         gate_x = nn.sigmoid(
             BlockDiagonalLinear(
-                n_blocks=self.H.rnn_n_diag_blocks,
-                d_input=self.d_hidden
+                n_blocks=self.H.rnn_n_diag_blocks, d_input=self.d_hidden
             )(x)
         )
         gate_a = nn.sigmoid(
             BlockDiagonalLinear(
-                n_blocks=self.H.rnn_n_diag_blocks,
-                d_input=self.d_hidden
+                n_blocks=self.H.rnn_n_diag_blocks, d_input=self.d_hidden
             )(x)
         )
 
@@ -225,7 +220,7 @@ class RNNBlock(nn.Module):
         x = self.norm(x)
         x_fwd, _ = self.forward(x)
         x = (x_fwd + self.backward(x)[0]) / 2 if self.bidirectional else x_fwd
-        #x = x + identity if self.residual else x
+        # x = x + identity if self.residual else x
 
         x = nn.gelu(x)
         x = self.last_dense(x) * self.last_scale

@@ -155,16 +155,15 @@ class Backbone(nn.Module):
         return rearrange(
             x,
             "bs (new_seq_len patch) c -> bs new_seq_len (c patch)",
-            patch=self.H.patch_size
+            patch=self.H.patch_size,
         )
 
     def untokenize(self, x):
         return rearrange(
             x,
             "bs new_seq_len (c patch) -> bs (new_seq_len patch) c",
-            patch=self.H.patch_size
+            patch=self.H.patch_size,
         )
-
 
     @nn.compact
     def __call__(self, x_t, t):
