@@ -266,5 +266,4 @@ class ARModel(nn.Module):
         def fix_point(i, x):
             return random.categorical(rng, self.evaluate(x), -1)
 
-        x = lax.fori_loop(0, gen_len, fix_point, x).block_until_ready()
-        return x
+        return lax.fori_loop(0, gen_len, fix_point, x)
