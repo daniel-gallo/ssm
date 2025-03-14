@@ -367,16 +367,17 @@ def save_samples(H: Hyperparams, step, samples):
 def save_mnist_binarized(H: Hyperparams, step, samples):
     batch_size, seq_length, num_channels = samples.shape
     assert seq_length == 28 * 28
-    assert num_channels == 2
+    assert num_channels == 1
+    samples = jnp.squeeze(samples, 2)
 
     sample_dir = Path(H.sample_dir) / H.id
     sample_dir.mkdir(parents=True, exist_ok=True)
 
-    samples = jnp.reshape(samples, (batch_size, 28, 28, 2))
+    samples = jnp.reshape(samples, (batch_size, 28, 28))
     samples = jnp.repeat(samples, 4, 1)
     samples = jnp.repeat(samples, 4, 2)
     samples = jnp.astype(
-        255 * jnp.hstack(nn.softmax(samples)[:, :, :, 1]), "uint8"
+        255 * jnp.hstack(samples), "uint8"
     )
     samples = Image.fromarray(np.array(samples), mode="L")
     samples.save(sample_dir / f"step-{step}.png")
@@ -388,12 +389,12 @@ def save_mnist_binarized(H: Hyperparams, step, samples):
 
 def save_audio(H: Hyperparams, step, samples):
     batch_size, seq_length, num_channels = samples.shape
+    assert num_channels == 1
+    samples = jnp.squeeze(samples, 2)
 
     sample_dir = Path(H.sample_dir) / H.id
     sample_dir.mkdir(parents=True, exist_ok=True)
 
-    # One hot encoding -> [0, 255]
-    samples = jnp.argmax(samples, axis=-1)
     # [0, 255] -> [-2**15, 2**15 - 1]
     samples = mu_law_decode(samples)
 
