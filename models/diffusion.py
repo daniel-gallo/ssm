@@ -23,6 +23,7 @@ class DiffusionHyperparams(Hyperparams):
     rnn_norm_input: bool = True
     rnn_pos_embedding: bool = True
     rnn_hidden_size: int = 128
+    rnn_n_diag_blocks: int = 1
     scan_implementation: str = "linear_pallas"
 
     @property
