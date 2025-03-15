@@ -273,7 +273,7 @@ class RGLRU(nn.Module):
         # TODO: placement of norm corresponding to RGLRU
         # reconsider doing it before gating
         if self.H.rnn_norm_input:
-            x = jnp.sqrt(1 - a_squared) * x
+            x = complex_lib.sqrt(1 - a_squared) * x
 
         h, h_last = scan.linear_scan(
             x=x,

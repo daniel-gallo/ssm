@@ -343,6 +343,17 @@ def abs_squared(x: RealOrComplex) -> jax.Array:
     return x.real**2 + x.imag**2
 
 
+def sqrt(x: RealOrComplex) -> RealOrComplex:
+    if isinstance(x, Complex):
+        mag = jnp.sqrt(x.real**2 + x.imag**2)
+        return Complex(
+            jnp.sqrt(0.5 * (mag + x.real)),
+            jnp.sign(x.imag) * jnp.sqrt(0.5 * (mag - x.real)),
+        )
+    else:
+        return jnp.sqrt(x)
+
+
 def einsum(sum_str: str, *args: jax.Array | Complex) -> jax.Array | Complex:
     """Computes the equivalent of jnp.einsum."""
     num_custom_complex_args = sum(isinstance(arg, Complex) for arg in args)
