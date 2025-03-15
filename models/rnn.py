@@ -234,6 +234,7 @@ class LRU(nn.Module):
     H: Hyperparams
     d_hidden: int  # hidden state dimension
     d_out: int  # input and output dimensions
+    reverse: bool = False
     max_phase: float = 6.28  # max phase lambda
 
     def setup(self):
@@ -247,7 +248,7 @@ class LRU(nn.Module):
             functools.partial(
                 nu_init,
                 r_min=self.H.rnn_init_minval,
-                r_max=self.rnn_init_maxval,
+                r_max=self.H.rnn_init_maxval,
             ),
             (self.d_hidden,),
         )
@@ -286,7 +287,7 @@ class LRU(nn.Module):
         )
         self.D = self.param("D", matrix_init, (self.d_out,))
 
-    def __call__(self, inputs):
+    def __call__(self, x, h_prev=None, pos_emb=None):
         """Forward pass of a LRU: h_t+1 = lambda * h_t + B x_t+1, y_t = Re[C h_t + D x_t]"""
         diag_lambda = jnp.exp(
             -jnp.exp(self.nu_log) + 1j * jnp.exp(self.theta_log)
@@ -296,20 +297,18 @@ class LRU(nn.Module):
         )
         C = self.C_re + 1j * self.C_im
 
-        Lambda_elements = jnp.repeat(
-            diag_lambda[None, ...], inputs.shape[0], axis=0
-        )
-        Bu_elements = jax.vmap(lambda u: B_norm @ u)(inputs)
+        Lambda_elements = jnp.repeat(diag_lambda[None, ...], x.shape[0], axis=0)
+        Bu_elements = jax.vmap(lambda u: B_norm @ u)(x)
         # Compute hidden states
         _, hidden_states = parallel_scan(
             binary_operator_diag, (Lambda_elements, Bu_elements)
         )
         # Use them to compute the output of the module
         outputs = jax.vmap(lambda h, x: (C @ h).real + self.D * x)(
-            hidden_states, inputs
+            hidden_states, x
         )
 
-        return outputs
+        return outputs, hidden_states[-1]
 
 
 class RNN(nn.Module):
