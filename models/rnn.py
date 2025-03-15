@@ -239,12 +239,12 @@ class LRU(nn.Module):
     def setup(self):
         self.theta_log = self.param(
             "theta_log",
-            jax.partial(theta_init, max_phase=self.max_phase),
+            functools.partial(theta_init, max_phase=self.max_phase),
             (self.d_hidden,),
         )
         self.nu_log = self.param(
             "nu_log",
-            jax.partial(
+            functools.partial(
                 nu_init,
                 r_min=self.H.rnn_init_minval,
                 r_max=self.rnn_init_maxval,
@@ -258,22 +258,30 @@ class LRU(nn.Module):
         # Glorot initialized Input/Output projection matrices
         self.B_re = self.param(
             "B_re",
-            jax.partial(matrix_init, normalization=jnp.sqrt(2 * self.d_out)),
+            functools.partial(
+                matrix_init, normalization=jnp.sqrt(2 * self.d_out)
+            ),
             (self.d_hidden, self.d_out),
         )
         self.B_im = self.param(
             "B_im",
-            jax.partial(matrix_init, normalization=jnp.sqrt(2 * self.d_out)),
+            functools.partial(
+                matrix_init, normalization=jnp.sqrt(2 * self.d_out)
+            ),
             (self.d_hidden, self.d_out),
         )
         self.C_re = self.param(
             "C_re",
-            jax.partial(matrix_init, normalization=jnp.sqrt(self.d_hidden)),
+            functools.partial(
+                matrix_init, normalization=jnp.sqrt(self.d_hidden)
+            ),
             (self.d_out, self.d_hidden),
         )
         self.C_im = self.param(
             "C_im",
-            jax.partial(matrix_init, normalization=jnp.sqrt(self.d_hidden)),
+            functools.partial(
+                matrix_init, normalization=jnp.sqrt(self.d_hidden)
+            ),
             (self.d_out, self.d_hidden),
         )
         self.D = self.param("D", matrix_init, (self.d_out,))
