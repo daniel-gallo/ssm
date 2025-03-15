@@ -145,7 +145,14 @@ def stable_sqrt_bwd(
     g: jax.Array,
 ) -> tuple[jax.Array]:  # pylint: disable=g-one-element-tuple
     (x,) = res
-    x_pre = jnp.maximum(x, 1 / (4 * max_gradient**2))
+    if isinstance(x, complex_lib.Complex):
+        magnitude = jnp.sqrt(x.real**2 + x.imag**2)
+        rescale = jnp.min(
+            jnp.ones(magnitude.shape), (1 / (magnitude * (4 * max_gradient**2)))
+        )
+        x_pre = x * rescale
+    else:
+        x_pre = jnp.maximum(x, 1 / (4 * max_gradient**2))
     return jax.vjp(complex_lib.sqrt, x_pre)[1](g)
 
 
@@ -304,7 +311,7 @@ class RGLRU(nn.Module):
         # TODO: placement of norm corresponding to RGLRU
         # reconsider doing it before gating
         if self.H.rnn_norm_input:
-            x = sqrt_bound_derivative(1 - a_squared) * x
+            x = sqrt_bound_derivative(1 - a_squared, 1000) * x
 
         h, h_last = scan.linear_scan(
             x=x,
