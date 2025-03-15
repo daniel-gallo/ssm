@@ -42,20 +42,22 @@ class ARHyperparams(Hyperparams):
 
     rnn_init_minval: float = 0.9
     rnn_init_maxval: float = 0.99
+    rnn_init_imag: float = 0.1
     rnn_norm_input: bool = True
     rnn_hidden_size: int = 256
     rnn_out_size: int = 16
     rnn_pos_embedding: bool = True
     rnn_block: str = "rglru"
+    rnn_only_real: bool = False
 
     rnn_n_diag_blocks: int = 64
 
     base_dim: int = 64
     ff_expand: int = 2
     rnn_last_scale: float = 0.25
-    rnn_n_layers: int = 4
+    rnn_n_layers: int = 2
 
-    scan_implementation: str = "linear_pallas"
+    scan_implementation: str = "linear_native"
 
     @property
     def model(self):

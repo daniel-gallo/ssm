@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from jax.scipy.special import expit, logit
 
 from hps import Hyperparams
-from models.efficient_scan import common, pallas, scan
+from models.efficient_scan import common, complex_lib, pallas, scan
 
 # TODO: probably should be passed in train.py
 _mesh = jax.make_mesh((jax.device_count(),), ("batch",))
@@ -53,6 +53,72 @@ def get_sinusoidal_embeddings(batch_size, seq_len, dim):
 
     # TODO: find less hacky alternative to dividing by 10 here:
     return jnp.broadcast_to(pe, (batch_size, seq_len, dim)) / 10
+
+
+def merged_to_complex(H: Hyperparams, x) -> complex_lib.RealOrComplex:
+    """Returns a (complex) array from a merged array.
+
+    A merged array is one where the first half over the last axis represents the
+    real part of a complex array, while the second part represents the
+    imaginary.
+
+    Args:
+      x: The merged array.
+
+    Returns:
+      A (complex) array represented by `x`.
+    """
+    if H.rnn_only_real:
+        return x
+
+    assert x.shape[-1] % 2 == 0
+    return real_imag_complex(H, *jnp.split(x, 2, axis=-1))
+
+
+def real_imag_complex(H: Hyperparams, real, imag) -> complex_lib.RealOrComplex:
+    """Based on the settings, creates a (complex) number in the correct format.
+
+    Args:
+      real: The real part of the complex number.
+      imag: The imaginary part of the complex number.
+
+    Returns:
+      The correct representation for a complex number. If `only_real=True`
+      the function expects that `imag` is None and will directly return `real`.
+      When using `bfloat16` or Pallas a `complex_lib.Complex` is returned,
+      otherwise a native jax array with a complex type.
+    """
+    if H.rnn_only_real:
+        assert imag is None
+        return real
+
+    return complex_lib.Complex(real, imag)
+
+
+def complex_to_merged(
+    H: Hyperparams,
+    x: complex_lib.RealOrComplex,
+):
+    """Returns a merged array from a (complex) array.
+
+    A merged array is one where the first half over the last axis represents the
+    real part of a complex array, while the second part represents the
+    imaginary.
+
+    Args:
+      x: The (complex) array.
+
+    Returns:
+      A merged array represented by `x`.
+    """
+    if H.rnn_only_real:
+        assert not isinstance(x, complex_lib.Complex) and not jnp.iscomplexobj(
+            x
+        )
+        return x
+
+    else:
+        return einops.rearrange([x.real, x.imag], "c ... d -> ... (c d)", c=2)
 
 
 class BlockDiagonalLinear(nn.Module):
@@ -140,35 +206,68 @@ class RGLRU(nn.Module):
     def __call__(self, x, h_prev=None, pos_emb=None):
         # TODO: implement BlockDiagonalLinear from RecurrentGemma
         batch_size, seq_len, d_in = x.shape
+        d_hidden = self.d_hidden if self.H.rnn_only_real else self.d_hidden // 2
 
-        def stable_init(rng, shape):
+        # def stable_init_real(rng, shape):
+        #     r_min, r_max = self.H.rnn_init_minval, self.H.rnn_init_maxval
+        #     u = jax.random.uniform(
+        #         key=rng, shape=shape, minval=r_min, maxval=r_max
+        #     )
+        #     return logit(u)
+
+        def stable_init_real(rng, shape, eps=1e-8):
             r_min, r_max = self.H.rnn_init_minval, self.H.rnn_init_maxval
-            u = jax.random.uniform(
-                key=rng, shape=shape, minval=r_min, maxval=r_max
-            )
-            return logit(u)
+            u = jax.random.uniform(rng, shape=shape)
+            a_real = 0.5 * jnp.log(u * (r_max**2 - r_min**2) + r_min**2 + eps)
+            return jnp.log(jnp.exp(-a_real) - 1.0)
 
-        a_logit = self.param("a_logit", stable_init, (self.d_hidden,))
-        a_expit = expit(a_logit)
+        def stable_init_imag(rng, shape):
+            u = jax.random.uniform(rng, shape=shape)
+            return jnp.pi * self.H.rnn_init_imag * u
+
+        a_real_param = self.param("a_real_param", stable_init_real, (d_hidden,))
+        if not self.H.rnn_only_real:
+            a_imag_param = self.param(
+                "a_imag_param", stable_init_imag, (d_hidden,)
+            )
+
         if self.H.rnn_pos_embedding:
             if pos_emb is None:
                 pos_emb = get_sinusoidal_embeddings(batch_size, seq_len, 16)
             x = jnp.concatenate([x, pos_emb], -1)
         x = nn.Dense(self.d_hidden)(x)
 
-        gate_x = nn.sigmoid(
+        gate_x = complex_lib.sigmoid(
             BlockDiagonalLinear(
-                n_blocks=self.H.rnn_n_diag_blocks, d_input=self.d_hidden
+                n_blocks=self.H.rnn_n_diag_blocks,
+                d_input=self.d_hidden,
+                d_output=d_hidden,
             )(x)
         )
-        gate_a = nn.sigmoid(
+        gate_a = complex_lib.sigmoid(
             BlockDiagonalLinear(
-                n_blocks=self.H.rnn_n_diag_blocks, d_input=self.d_hidden
+                n_blocks=self.H.rnn_n_diag_blocks,
+                d_input=self.d_hidden,
+                d_output=d_hidden,
             )(x)
         )
 
-        a = gate_a * a_expit
-        a_squared = a**2
+        log_a = -8.0 * gate_a * complex_lib.softplus(a_real_param)
+        if self.H.rnn_only_real:
+            a, a_squared = complex_lib.exp(log_a), complex_lib.exp(2 * log_a)
+        else:
+            log_a_imag = a_imag_param * gate_a
+            log_a_complex = real_imag_complex(self.H, log_a, log_a_imag)
+            a, a_squared = (
+                complex_lib.exp(log_a_complex),
+                complex_lib.exp(2 * log_a_complex),
+            )
+        x = merged_to_complex(self.H, x)
+        h_prev = (
+            self.merged_to_complex(self.H, h_prev)
+            if h_prev is not None
+            else None
+        )
 
         x = gate_x * x
         # TODO: placement of norm corresponding to RGLRU
@@ -185,6 +284,8 @@ class RGLRU(nn.Module):
             sharding_spec=SHARDING_SPEC,
             unroll=128,
         )
+        h = complex_to_merged(self.H, h)
+        h_last = complex_to_merged(self.H, h_last)
         return nn.Dense(self.d_out)(h), h_last
 
     def default_state(self, batch_size):

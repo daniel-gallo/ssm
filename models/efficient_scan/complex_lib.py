@@ -16,7 +16,7 @@
 
 import functools
 import types
-from typing import Any, Sequence, TypeVar
+from typing import Any, Sequence, TypeVar, Union
 
 import einops
 import jax
@@ -24,8 +24,6 @@ import jax.experimental.pallas as pl
 import jax.numpy as jnp
 import numpy as np
 from flax import struct
-
-RealOrComplex = TypeVar("RealOrComplex", jax.Array, "Complex")
 
 
 def _arg_is_pytree_placeholder(arg: Any) -> bool:
@@ -123,7 +121,7 @@ class Complex:
 
     def _sanity_check(
         self,
-        x: RealOrComplex,
+        x: Union[jax.Array, "Complex"],
     ) -> None:
         """Check if the arg is not native complex and has the same dtype as this instance.
 
@@ -142,7 +140,7 @@ class Complex:
                 f" {x.dtype}"
             )
 
-    def __matmul__(self, x: RealOrComplex) -> "Complex":
+    def __matmul__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
         """Performs the matrix multiplication operation."""
         self._sanity_check(x)
 
@@ -157,7 +155,7 @@ class Complex:
         imag = tmp - tmp_real - tmp_imag
         return Complex(real=real, imag=imag)
 
-    def __mul__(self, x: RealOrComplex) -> "Complex":
+    def __mul__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
         """Performs the multiplication operation."""
         self._sanity_check(x)
 
@@ -170,7 +168,7 @@ class Complex:
 
     __rmul__ = __mul__
 
-    def __truediv__(self, x: RealOrComplex) -> "Complex":
+    def __truediv__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
         self._sanity_check(x)
 
         if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
@@ -184,7 +182,7 @@ class Complex:
     def __neg__(self) -> "Complex":
         return Complex(real=-self.real, imag=-self.imag)
 
-    def __sub__(self, x: RealOrComplex) -> "Complex":
+    def __sub__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
         self._sanity_check(x)
         return Complex(real=self.real - x.real, imag=self.imag - x.imag)
 
@@ -192,7 +190,7 @@ class Complex:
         self._sanity_check(x)
         return Complex(real=x - self.real, imag=-self.imag)
 
-    def __add__(self, x: RealOrComplex) -> "Complex":
+    def __add__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
         self._sanity_check(x)
         return Complex(real=self.real + x.real, imag=self.imag + x.imag)
 
@@ -212,8 +210,7 @@ class Complex:
     ) -> jax.Array:  # pytype: disable=signature-mismatch
         if not isinstance(other, (jax.Array, np.ndarray, Complex)):
             raise ValueError(
-                "Expected argument to be of type jax.Array, np.ndarray"
-                "or Complex."
+                "Expected argument to be of type jax.Array, np.ndarrayor Complex."
             )
 
         all_equal_real = jnp.equal(self.real, other.real)
@@ -223,6 +220,9 @@ class Complex:
     def __iter__(self):
         for a, b in zip(self.real, self.imag):
             yield Complex(real=a, imag=b)
+
+
+RealOrComplex = TypeVar("RealOrComplex", jax.Array, Complex)
 
 
 def _treat_method(
@@ -290,6 +290,20 @@ slice_in_dim = functools.partial(_treat_method, "slice_in_dim", jax.lax)
 # EINOPS Methods
 rearrange = functools.partial(_treat_method, "rearrange", einops)
 repeat = functools.partial(_treat_method, "repeat", einops)
+
+
+def sigmoid(x: RealOrComplex) -> RealOrComplex:
+    if isinstance(x, Complex):
+        return 1 / (1 + exp(-x))
+
+    return jax.nn.sigmoid(x)
+
+
+def softplus(x: RealOrComplex) -> RealOrComplex:
+    if isinstance(x, Complex):
+        return log(1 + exp(x))
+    else:
+        return jax.nn.softplus(x)
 
 
 # Special methods
