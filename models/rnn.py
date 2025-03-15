@@ -1,3 +1,4 @@
+import functools
 from typing import Union
 
 import einops
@@ -119,6 +120,36 @@ def complex_to_merged(
 
     else:
         return einops.rearrange([x.real, x.imag], "c ... d -> ... (c d)", c=2)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(1,))
+def sqrt_bound_derivative(
+    x: complex_lib.RealOrComplex,
+    max_gradient: float | jax.Array,
+) -> jax.Array:
+    """Computes a square root with a gradient clipped at `max_gradient`."""
+    del max_gradient  # unused
+    return complex_lib.sqrt(x)
+
+
+def stable_sqrt_fwd(
+    x: jax.Array,
+    _: float | jax.Array,
+) -> tuple[jax.Array, tuple[jax.Array]]:  # pylint: disable=g-one-element-tuple
+    return complex_lib.sqrt(x), (x,)
+
+
+def stable_sqrt_bwd(
+    max_gradient: float | jax.Array,
+    res: tuple[jax.Array],  # pylint: disable=g-one-element-tuple
+    g: jax.Array,
+) -> tuple[jax.Array]:  # pylint: disable=g-one-element-tuple
+    (x,) = res
+    x_pre = jnp.maximum(x, 1 / (4 * max_gradient**2))
+    return jax.vjp(complex_lib.sqrt, x_pre)[1](g)
+
+
+sqrt_bound_derivative.defvjp(stable_sqrt_fwd, stable_sqrt_bwd)
 
 
 class BlockDiagonalLinear(nn.Module):
@@ -273,7 +304,7 @@ class RGLRU(nn.Module):
         # TODO: placement of norm corresponding to RGLRU
         # reconsider doing it before gating
         if self.H.rnn_norm_input:
-            x = complex_lib.sqrt(1 - a_squared) * x
+            x = sqrt_bound_derivative(1 - a_squared) * x
 
         h, h_last = scan.linear_scan(
             x=x,
