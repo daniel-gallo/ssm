@@ -233,7 +233,7 @@ class LRU(nn.Module):
 
     H: Hyperparams
     d_hidden: int  # hidden state dimension
-    d_model: int  # input and output dimensions
+    d_out: int  # input and output dimensions
     max_phase: float = 6.28  # max phase lambda
 
     def setup(self):
@@ -258,25 +258,25 @@ class LRU(nn.Module):
         # Glorot initialized Input/Output projection matrices
         self.B_re = self.param(
             "B_re",
-            jax.partial(matrix_init, normalization=jnp.sqrt(2 * self.d_model)),
-            (self.d_hidden, self.d_model),
+            jax.partial(matrix_init, normalization=jnp.sqrt(2 * self.d_out)),
+            (self.d_hidden, self.d_out),
         )
         self.B_im = self.param(
             "B_im",
-            jax.partial(matrix_init, normalization=jnp.sqrt(2 * self.d_model)),
-            (self.d_hidden, self.d_model),
+            jax.partial(matrix_init, normalization=jnp.sqrt(2 * self.d_out)),
+            (self.d_hidden, self.d_out),
         )
         self.C_re = self.param(
             "C_re",
             jax.partial(matrix_init, normalization=jnp.sqrt(self.d_hidden)),
-            (self.d_model, self.d_hidden),
+            (self.d_out, self.d_hidden),
         )
         self.C_im = self.param(
             "C_im",
             jax.partial(matrix_init, normalization=jnp.sqrt(self.d_hidden)),
-            (self.d_model, self.d_hidden),
+            (self.d_out, self.d_hidden),
         )
-        self.D = self.param("D", matrix_init, (self.d_model,))
+        self.D = self.param("D", matrix_init, (self.d_out,))
 
     def __call__(self, inputs):
         """Forward pass of a LRU: h_t+1 = lambda * h_t + B x_t+1, y_t = Re[C h_t + D x_t]"""
