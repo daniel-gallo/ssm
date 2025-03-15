@@ -147,6 +147,7 @@ def stable_sqrt_bwd(
     (x,) = res
     if isinstance(x, complex_lib.Complex):
         magnitude = jnp.sqrt(x.real**2 + x.imag**2)
+        # TODO: this part not working for jitted functions, not sure why
         rescale = jnp.min(
             jnp.ones(magnitude.shape), (1 / (magnitude * (4 * max_gradient**2)))
         )
@@ -311,7 +312,8 @@ class RGLRU(nn.Module):
         # TODO: placement of norm corresponding to RGLRU
         # reconsider doing it before gating
         if self.H.rnn_norm_input:
-            x = sqrt_bound_derivative(1 - a_squared, 1000) * x
+            # x = sqrt_bound_derivative(1 - a_squared, 1000) * x
+            x = complex_lib.sqrt(1 - a_squared) * x
 
         h, h_last = scan.linear_scan(
             x=x,
