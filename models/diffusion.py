@@ -22,6 +22,7 @@ class DiffusionHyperparams(Hyperparams):
     rnn_norm_input: bool = True
     rnn_pos_embedding: bool = True
     rnn_hidden_size: int = 128
+    rnn_n_diag_blocks: int = 1
     scan_implementation: str = "linear_pallas"
 
     @property
@@ -84,7 +85,6 @@ class ResBlock(nn.Module):
     @nn.compact
     def __call__(self, x, c):
         bs, seq_len, d = x.shape
-        print(x.shape)
         # Temporal module
         x = x + Gate()(c) * RNNBlock(
             H=self.H, d_out=d, bidirectional=True, residual=False
@@ -257,9 +257,5 @@ class DiffusionModel(nn.Module):
         # Make x_t contain ints with the class numbers (a bit ugly)
         x_t = x_t * self.H.data_num_cats
         x_t = jnp.floor(x_t).astype(jnp.int32)
-        # Make x_t one-hot-encoded
-        x_t = nn.one_hot(x_t, num_classes=self.H.data_num_cats)
-        # TODO: this is a fix until the sampling process is fixed upstream
-        x_t = x_t.squeeze()
 
         return x_t
