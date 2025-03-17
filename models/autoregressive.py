@@ -40,22 +40,23 @@ class ARHyperparams(Hyperparams):
     pool_temporal: tuple[int, ...] = (4, 4)
     pool_features: tuple[int, ...] = (2, 2)
 
-    rnn_init_minval: float = 0.9
+    rnn_init_minval: float = 0.4
     rnn_init_maxval: float = 0.99
     rnn_init_imag: float = 0.1
     rnn_norm_input: bool = True
-    rnn_hidden_size: int = 256
+    rnn_hidden_size: int = 128
     rnn_out_size: int = 64
     rnn_pos_embedding: bool = False
     rnn_block: str = "rglru"
-    rnn_only_real: bool = False
+    rnn_only_real: bool = True
 
     rnn_n_diag_blocks: int = 64
 
     base_dim: int = 64
     ff_expand: int = 2
-    rnn_last_scale: float = 0.25
+    rnn_last_scale: float = 1.0
     rnn_n_layers: int = 4
+    use_gating: bool = True
     scan_implementation: str = "linear_pallas"
 
     @property
@@ -112,10 +113,14 @@ class ResBlock(nn.Module):
     def __call__(self, x, deterministic=False):
         bs, seq_len, dim = x.shape
         expand = self.expand or self.H.ff_expand
-        z = nn.LayerNorm(feature_axes=-1)(x)
+        z = nn.LayerNorm()(x)
+        z = jnp.copy(z)
         z = nn.Dense(dim * expand)(z)
         z = nn.gelu(z)
-        z = nn.Dense(dim)(z)
+        if self.H.use_gating:
+            z = nn.Dense(dim)(z) * nn.sigmoid(nn.Dense(dim)(z))
+        else:
+            z = nn.Dense(dim)(z)
         z = z * self.last_scale
         return x + z, None
 
@@ -142,7 +147,9 @@ class RNNBlock(nn.Module):
                 reverse=True,
             )
         self.last_dense = nn.Dense(self.d_out)
-        self.norm = nn.LayerNorm(feature_axes=-1)
+        if self.H.use_gating:
+            self.gate_dense = nn.Dense(self.d_out)
+        self.norm = nn.LayerNorm()
 
     def __call__(self, x, h_prev=None):
         assert h_prev is None or not self.bidirectional
@@ -152,7 +159,11 @@ class RNNBlock(nn.Module):
         x = (x_fwd + self.backward(x)[0]) / 2 if self.bidirectional else x_fwd
 
         x = nn.gelu(x)
-        x = self.last_dense(x) * self.last_scale
+        if self.H.use_gating
+            x = self.last_dense(x) * nn.sigmoid(self.gate_dense(identity))
+        else:
+            x = self.last_dense(x)
+        x = x * self.last_scale
         x = x + identity if self.residual else x
         return x, h_next
 
@@ -161,9 +172,12 @@ class ARModel(nn.Module):
     H: ARHyperparams
 
     def setup(self):
-        self.input_mlp = nn.Dense(self.H.base_dim)
+        self.input_mlp = nn.Dense(
+            self.H.base_dim,
+            bias_init=jax.nn.initializers.normal(0.5),
+        )
         self.cls_mlp = nn.Dense(self.H.data_num_cats)
-        self.norm = nn.LayerNorm(feature_axes=-1)
+        self.norm = nn.LayerNorm()
 
         d_layers = []
         model_dim = self.H.base_dim

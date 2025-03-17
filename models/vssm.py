@@ -65,9 +65,10 @@ class VSSMHyperparams(Hyperparams):
     rnn_out_size: int = 64
     rnn_pos_embedding: bool = True
     rnn_block: str = "rglru"
-    rnn_only_real: bool = False
+    rnn_only_real: bool = True
 
     rnn_n_diag_blocks: int = 64
+    use_gating: bool = False
 
     scan_implementation: str = "linear_pallas"
 
@@ -273,7 +274,10 @@ class Encoder(nn.Module):
     def __call__(self, x):
         # TODO: also expand the rnn hidden size
         H = self.H
-        x = nn.Dense(self.H.rnn_out_size)(H.data_preprocess_fn(x))
+        x = nn.Dense(
+            self.H.rnn_out_size,
+            bias_init=jax.nn.initializers.normal(0.5)
+        )(H.data_preprocess_fn(x))
         acts = []
         features = H.rnn_out_size
         for d in H.encoder_rnn_layers[:-1]:

@@ -27,6 +27,8 @@ class DiffusionHyperparams(Hyperparams):
     rnn_n_diag_blocks: int = 1
     scan_implementation: str = "linear_pallas"
 
+    use_gating: bool = False
+
     @property
     def model(self):
         return DiffusionModel(self)

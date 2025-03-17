@@ -238,9 +238,10 @@ class LRU(nn.Module):
     max_phase: float = 6.28  # max phase lambda
 
     def setup(self):
+        self.input_dense = nn.Dense(self.d_out)
         self.theta_log = self.param(
             "theta_log",
-            functools.partial(theta_init, max_phase=self.max_phase),
+            functools.partial(theta_init, max_phase=self.H.rnn_init_imag),
             (self.d_hidden,),
         )
         self.nu_log = self.param(
@@ -288,27 +289,36 @@ class LRU(nn.Module):
         self.D = self.param("D", matrix_init, (self.d_out,))
 
     def __call__(self, x, h_prev=None, pos_emb=None):
-        """Forward pass of a LRU: h_t+1 = lambda * h_t + B x_t+1, y_t = Re[C h_t + D x_t]"""
-        diag_lambda = jnp.exp(
-            -jnp.exp(self.nu_log) + 1j * jnp.exp(self.theta_log)
-        )
-        B_norm = (self.B_re + 1j * self.B_im) * jnp.expand_dims(
-            jnp.exp(self.gamma_log), axis=-1
-        )
-        C = self.C_re + 1j * self.C_im
 
-        Lambda_elements = jnp.repeat(diag_lambda[None, ...], x.shape[0], axis=0)
-        Bu_elements = jax.vmap(lambda u: B_norm @ u)(x)
-        # Compute hidden states
-        _, hidden_states = parallel_scan(
-            binary_operator_diag, (Lambda_elements, Bu_elements)
-        )
-        # Use them to compute the output of the module
-        outputs = jax.vmap(lambda h, x: (C @ h).real + self.D * x)(
-            hidden_states, x
-        )
+        def __inner(x):
+            """Forward pass of a LRU: h_t+1 = lambda * h_t + B x_t+1, y_t = Re[C h_t + D x_t]"""
+            diag_lambda = jnp.exp(
+                -jnp.exp(self.nu_log) + 1j * jnp.exp(self.theta_log)
+            )
+            B_norm = (self.B_re + 1j * self.B_im) * jnp.expand_dims(
+                jnp.exp(self.gamma_log), axis=-1
+            )
+            C = self.C_re + 1j * self.C_im
 
-        return outputs, hidden_states[-1]
+            x = self.input_dense(x)
+            Lambda_elements = jnp.repeat(diag_lambda[None, ...], x.shape[0], axis=0)
+            Bu_elements = jax.vmap(lambda v: B_norm @ v)(x)
+
+            # Compute hidden states
+            _, hidden_states = parallel_scan(
+                binary_operator_diag, (Lambda_elements, Bu_elements),
+                reverse=self.reverse,
+            )
+
+            # Use them to compute the output of the module
+            outputs = jax.vmap(lambda h, x: (C @ h).real + self.D * x)(
+                hidden_states, x
+            )
+
+            return outputs, hidden_states[-1]
+
+        outputs, hidden_states = jax.vmap(__inner)(x)
+        return outputs, hidden_states
 
 
 class RNN(nn.Module):
@@ -474,6 +484,8 @@ class RNNBlock(nn.Module):
                 reverse=True,
             )
         self.last_dense = nn.Dense(self.d_out)
+        if self.H.use_gating:
+            self.gate_dense = nn.Dense(self.d_out)
         self.norm = nn.LayerNorm()
 
     def __call__(self, x):
@@ -484,6 +496,10 @@ class RNNBlock(nn.Module):
         # x = x + identity if self.residual else x
 
         x = nn.gelu(x)
-        x = self.last_dense(x) * self.last_scale
+        if self.H.use_gating:
+            x = self.last_dense(x) * nn.sigmoid(self.gate_dense(x))
+        else:
+            x = self.last_dense(x)
+        x = x * self.last_scale
         x = x + identity if self.residual else x
         return x
