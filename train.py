@@ -12,10 +12,9 @@ import numpy as np
 import optax
 import tyro
 from flax.training import checkpoints
-from jax import random, tree_util
+from jax import random, tree, tree_util
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
-from jax.tree_util import tree_leaves
 from jax.util import safe_map
 
 from data import load_data, save_samples
@@ -48,15 +47,15 @@ def get_epoch(step, batch_size, data_size):
 
 
 def accum_metrics(metrics):
-    return tree_util.tree_map(lambda *args: jnp.mean(jnp.array(args)), *metrics)
+    return tree.map(lambda *args: jnp.mean(jnp.array(args)), *metrics)
 
 
 def prepend_to_keys(d, s):
-    return {s + k: v for k, v in d.items()}
+    return {s + k: d[k] for k in d}
 
 
 def clip_grad(H: Hyperparams, g, metrics):
-    g_flat, treedef = tree_util.tree_flatten(g)
+    g_flat, treedef = tree.flatten(g)
     norm = jnp.linalg.norm(jnp.array(map(jnp.linalg.norm, g_flat)))
     clip_coeff = (
         jnp.minimum(H.grad_clip / (norm + 1e-6), 1) if H.grad_clip else 1
@@ -75,10 +74,10 @@ def clip_grad(H: Hyperparams, g, metrics):
 
 
 def cond(pred, true_val, false_val):
-    return tree_util.tree_map(partial(jnp.where, pred), true_val, false_val)
+    return tree.map(partial(jnp.where, pred), true_val, false_val)
 
 
-@jax.tree_util.register_dataclass
+@tree_util.register_dataclass
 @dataclass(frozen=True)
 class TrainState:
     weights: Any
@@ -224,7 +223,7 @@ def log_configuration(H: Hyperparams, S: TrainState):
         import wandb
 
         config = dataclasses.asdict(H)
-        num_parameters = sum(leaf.size for leaf in tree_leaves(S.weights))
+        num_parameters = sum(leaf.size for leaf in tree.leaves(S.weights))
         H.logprint(f"Number of parameters: {num_parameters}")
         config["num_parameters"] = num_parameters
         config["model"] = H.model.__class__.__name__
