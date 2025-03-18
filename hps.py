@@ -27,7 +27,6 @@ class Hyperparams:
     learning_rate_scheduler: Literal["constant", "warmup_cosine_decay"] = (
         "constant"
     )
-    b2: float = 0.999
     learning_rate_warmup_steps: int = 1000
     weight_decay: float = 1e-4
     grad_clip: Optional[float] = 200
@@ -78,9 +77,7 @@ class Hyperparams:
 
     @property
     def optimizer(self):
-        return optax.adamw(
-            self.scheduler, weight_decay=self.weight_decay, b2=self.b2
-        )
+        return optax.adamw(self.scheduler, weight_decay=self.weight_decay)
 
     def logprint(self, *args, **kwargs):
         logprint(self.log_dir, self.id, *args, **kwargs)
