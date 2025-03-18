@@ -131,14 +131,14 @@ def sqrt_bound_derivative(
 ) -> jax.Array:
     """Computes a square root with a gradient clipped at `max_gradient`."""
     del max_gradient  # unused
-    return complex_lib.sqrt(x)
+    return jnp.sqrt(x)
 
 
 def stable_sqrt_fwd(
     x: jax.Array,
     _: float | jax.Array,
 ) -> tuple[jax.Array, tuple[jax.Array]]:  # pylint: disable=g-one-element-tuple
-    return complex_lib.sqrt(x), (x,)
+    return jnp.sqrt(x), (x,)
 
 
 def stable_sqrt_bwd(
