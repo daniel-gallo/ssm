@@ -12,8 +12,11 @@ from models.rnn import RNNBlock
 
 @dataclasses.dataclass(frozen=True)
 class DiffusionHyperparams(Hyperparams):
-    d: int = 128
+    d_timestep_embedding: int = 128
+    d_blocks: Tuple[int, ...] = (64, 128)
     pool_factors: Tuple[int, ...] = (2, 2)
+    num_temporal_blocks: int = 4
+    num_convolutional_layers: int = 4
     diffusion_timesteps: int = 1000
 
     rnn_block: str = "rglru"
@@ -79,7 +82,7 @@ class Gate(nn.Module):
         )(c)[:, :, None]
 
 
-class ResBlock(nn.Module):
+class TemporalMixingBlock(nn.Module):
     H: DiffusionHyperparams
 
     @nn.compact
@@ -102,51 +105,67 @@ class ResBlock(nn.Module):
         return x
 
 
-class DownSample(nn.Module):
-    factor: int
-    d: int
+class TemporalMixing(nn.Module):
+    H: DiffusionHyperparams
 
     @nn.compact
-    def __call__(self, x):
-        x = rearrange(
-            x, "... (l factor) d -> ... l (factor d) ", factor=self.factor
-        )
-        x = nn.Dense(self.d)(x)
+    def __call__(self, x, c):
+        for _ in range(self.H.num_temporal_blocks):
+            x = TemporalMixingBlock(self.H)(x, c)
+
         return x
 
 
-class UpSample(nn.Module):
+class Pooling(nn.Module):
+    H: DiffusionHyperparams
     factor: int
     d: int
+    down: bool
 
     @nn.compact
-    def __call__(self, x):
-        x = rearrange(
-            x, "... l (factor d) -> ... (l factor) d", factor=self.factor
-        )
+    def __call__(self, x, c):
+        if self.down:
+            x = rearrange(
+                x, "... (l factor) d -> ... l (factor d) ", factor=self.factor
+            )
+        else:
+            x = rearrange(
+                x, "... l (factor d) -> ... (l factor) d", factor=self.factor
+            )
+
         x = nn.Dense(self.d)(x)
+
+        if self.H.num_convolutional_layers > 0:
+            skip = x
+            for _ in range(self.H.num_convolutional_layers):
+                x = nn.Conv(
+                    features=self.d, kernel_size=self.factor, padding="SAME"
+                )(x)
+                x = ConditionedLayerNorm()(x, c)
+                x = nn.gelu(x)
+            x = skip + Gate()(c) * x
+
         return x
 
 
 class SkipBlock(nn.Module):
-    H: DiffusionHyperparams
+    H: Hyperparams
     inner: nn.Module
     factor: int
+    inner_d: int
 
     @nn.compact
     def __call__(self, x, c):
         bs, seq_len, d = x.shape
 
         skip = x
-        x = DownSample(self.factor, self.H.d)(x)
-        x = ResBlock(self.H)(x, c)
+        x = Pooling(self.H, self.factor, self.inner_d, down=True)(x, c)
 
         x = self.inner(x, c)
 
-        x = ResBlock(self.H)(x, c)
-        x = UpSample(self.factor, d)(x)
-
+        x = Pooling(self.H, self.factor, d, down=False)(x, c)
         x = skip + Gate()(c) * x
+
         return x
 
 
@@ -159,13 +178,20 @@ class Backbone(nn.Module):
 
         # Conditioning vector (only time at the moment)
         c = nn.Sequential(
-            [nn.Dense(self.H.d), nn.gelu, nn.Dense(self.H.d), nn.gelu]
-        )(get_timestep_embedding(t, self.H.d))
+            [
+                nn.Dense(self.H.d_timestep_embedding),
+                nn.gelu,
+                nn.Dense(self.H.d_timestep_embedding),
+                nn.gelu,
+            ]
+        )(get_timestep_embedding(t, self.H.d_timestep_embedding))
 
         # Construct SkipBlock
-        block = Identity()
-        for factor in reversed(self.H.pool_factors):
-            block = SkipBlock(self.H, block, factor)
+        block = TemporalMixing(self.H)
+        for factor, d in zip(
+            reversed(self.H.pool_factors), reversed(self.H.d_blocks)
+        ):
+            block = SkipBlock(self.H, block, factor, d)
 
         x = block(x, c)
         return x
