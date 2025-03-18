@@ -1,4 +1,5 @@
 import dataclasses
+from re import X
 
 import flax.linen as nn
 import jax
@@ -40,23 +41,25 @@ class ARHyperparams(Hyperparams):
     pool_temporal: tuple[int, ...] = (4, 4)
     pool_features: tuple[int, ...] = (2, 2)
 
-    rnn_init_minval: float = 0.4
+    rnn_init_minval: float = 0.9
     rnn_init_maxval: float = 0.99
     rnn_init_imag: float = 0.1
     rnn_norm_input: bool = True
-    rnn_hidden_size: int = 128
+    rnn_hidden_size: int = 256
     rnn_out_size: int = 64
     rnn_pos_embedding: bool = False
     rnn_block: str = "rglru"
-    rnn_only_real: bool = True
+    rnn_only_real: bool = False
 
-    rnn_n_diag_blocks: int = 64
+    rnn_n_diag_blocks: int = 32
+
+    use_norm: bool = True
+    use_gating: bool = True
 
     base_dim: int = 64
     ff_expand: int = 2
-    rnn_last_scale: float = 1.0
-    rnn_n_layers: int = 4
-    use_gating: bool = True
+    rnn_last_scale: float = 0.125
+    rnn_n_layers: int = 8
     scan_implementation: str = "linear_pallas"
 
     @property
@@ -106,66 +109,54 @@ class UpPool(nn.Module):
 
 class ResBlock(nn.Module):
     H: ARHyperparams
-    expand: Union[int, None] = None
+    layer: nn.Module
     last_scale: float = 1.0
 
     @nn.compact
     def __call__(self, x, deterministic=False):
         bs, seq_len, dim = x.shape
-        expand = self.expand or self.H.ff_expand
-        z = nn.LayerNorm()(x)
-        z = jnp.copy(z)
-        z = nn.Dense(dim * expand)(z)
-        z = nn.gelu(z)
-        if self.H.use_gating:
-            z = nn.Dense(dim)(z) * nn.sigmoid(nn.Dense(dim)(z))
-        else:
-            z = nn.Dense(dim)(z)
+
+        z = nn.LayerNorm()(x) if self.H.use_norm else x
+        z = self.layer(z)
         z = z * self.last_scale
         return x + z, None
+
+
+class MLPBlock(nn.Module):
+    H: ARHyperparams
+    expand: int | None = None
+
+    @nn.compact
+    def __call__(self, x):
+        bs, seq_len, dim = x.shape
+        expand = self.expand or self.H.ff_expand
+        z = nn.Dense(dim * expand)(x)
+        if self.H.use_gating:
+            gated_x = nn.Dense(dim * expand)(x)
+            z = z * nn.gelu(gated_x)
+        else:
+            z = nn.gelu(z)
+        return nn.Dense(dim)(z)
 
 
 class RNNBlock(nn.Module):
     H: ARHyperparams
     d_out: int
-    bidirectional: bool = False
-    residual: bool = False
-    last_scale: float = 1.0
 
-    def setup(self):
+    @nn.compact
+    def __call__(self, x, h_prev=None):
         recurrent_block = get_recurrent_block(self.H)
-        self.forward = recurrent_block(
+        x_fwd, _ = recurrent_block(
             self.H,
             d_hidden=self.H.rnn_hidden_size,
             d_out=self.d_out,
-        )
-        if self.bidirectional:
-            self.backward = recurrent_block(
-                self.H,
-                d_hidden=self.H.rnn_hidden_size,
-                d_out=self.d_out,
-                reverse=True,
-            )
-        self.last_dense = nn.Dense(self.d_out)
+        )(x)
         if self.H.use_gating:
-            self.gate_dense = nn.Dense(self.d_out)
-        self.norm = nn.LayerNorm()
-
-    def __call__(self, x, h_prev=None):
-        assert h_prev is None or not self.bidirectional
-        identity = x
-        x = self.norm(x)
-        x_fwd, h_next = self.forward(x, h_prev)
-        x = (x_fwd + self.backward(x)[0]) / 2 if self.bidirectional else x_fwd
-
-        x = nn.gelu(x)
-        if self.H.use_gating
-            x = self.last_dense(x) * nn.sigmoid(self.gate_dense(identity))
+            gated_x = nn.Dense(self.d_out)(x)
+            x = x_fwd * nn.gelu(gated_x)
         else:
-            x = self.last_dense(x)
-        x = x * self.last_scale
-        x = x + identity if self.residual else x
-        return x, h_next
+            x = nn.gelu(x_fwd)
+        return nn.Dense(self.d_out)(x)
 
 
 class ARModel(nn.Module):
@@ -178,6 +169,20 @@ class ARModel(nn.Module):
         )
         self.cls_mlp = nn.Dense(self.H.data_num_cats)
         self.norm = nn.LayerNorm()
+
+        def _rnn_block(d_out, last_scale=1.0):
+            return ResBlock(
+                self.H,
+                layer=RNNBlock(self.H, d_out),
+                last_scale=last_scale,
+            )
+
+        def _mlp_block(expand=None, last_scale=1.0):
+            return ResBlock(
+                self.H,
+                layer=MLPBlock(self.H, expand=expand),
+                last_scale=last_scale,
+            )
 
         d_layers = []
         model_dim = self.H.base_dim
@@ -195,14 +200,12 @@ class ARModel(nn.Module):
         c_layers = []
         for _ in range(self.H.rnn_n_layers):
             c_layers.append(
-                RNNBlock(
-                    self.H,
+                _rnn_block(
                     model_dim,
-                    residual=True,
                     last_scale=self.H.rnn_last_scale,
                 )
             )
-            c_layers.append(ResBlock(self.H, last_scale=self.H.rnn_last_scale))
+            c_layers.append(_mlp_block(last_scale=self.H.rnn_last_scale))
 
         u_layers = []
         for p, expand in zip(
@@ -222,14 +225,12 @@ class ARModel(nn.Module):
 
             for _ in range(self.H.rnn_n_layers):
                 block.append(
-                    RNNBlock(
-                        self.H,
+                    _rnn_block(
                         model_dim,
-                        residual=True,
                         last_scale=self.H.rnn_last_scale,
                     )
                 )
-                block.append(ResBlock(self.H, last_scale=self.H.rnn_last_scale))
+                block.append(_mlp_block(last_scale=self.H.rnn_last_scale))
             u_layers.append(block)
 
         self.d_layers = d_layers
@@ -263,7 +264,7 @@ class ARModel(nn.Module):
                     outputs.append(x)
             x = x + outputs.pop()
 
-        # x = self.norm(x)
+        x = self.norm(x)
         x = jnp.reshape(
             self.cls_mlp(x),
             (

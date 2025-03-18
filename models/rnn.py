@@ -147,17 +147,8 @@ def stable_sqrt_bwd(
     g: jax.Array,
 ) -> tuple[jax.Array]:  # pylint: disable=g-one-element-tuple
     (x,) = res
-    if isinstance(x, complex_lib.Complex):
-        magnitude = jnp.sqrt(x.real**2 + x.imag**2)
-        # TODO: this part not working for jitted functions, not sure why
-        rescale = jnp.min(
-            jnp.ones(magnitude.shape), (1 / (magnitude * (4 * max_gradient**2)))
-        )
-        x_pre = x * rescale
-    else:
-        x_pre = jnp.maximum(x, 1 / (4 * max_gradient**2))
-    return jax.vjp(complex_lib.sqrt, x_pre)[1](g)
-
+    x_pre = jnp.maximum(x, 1 / (4 * max_gradient**2))
+    return jax.vjp(jnp.sqrt, x_pre)[1](g)
 
 sqrt_bound_derivative.defvjp(stable_sqrt_fwd, stable_sqrt_bwd)
 
@@ -423,14 +414,12 @@ class RGLRU(nn.Module):
 
         log_a = -8.0 * gate_a * complex_lib.softplus(a_real_param)
         if self.H.rnn_only_real:
-            a, a_squared = complex_lib.exp(log_a), complex_lib.exp(2 * log_a)
+            a = complex_lib.exp(log_a)
         else:
             log_a_imag = a_imag_param * gate_a
             log_a_complex = real_imag_complex(self.H, log_a, log_a_imag)
-            a, a_squared = (
-                complex_lib.exp(log_a_complex),
-                complex_lib.exp(2 * log_a_complex),
-            )
+            a = complex_lib.exp(log_a_complex)
+
         x = merged_to_complex(self.H, x)
         h_prev = (
             self.merged_to_complex(self.H, h_prev)
@@ -442,8 +431,10 @@ class RGLRU(nn.Module):
         # TODO: placement of norm corresponding to RGLRU
         # reconsider doing it before gating
         if self.H.rnn_norm_input:
-            # x = sqrt_bound_derivative(1 - a_squared, 1000) * x
-            x = complex_lib.sqrt(1 - a_squared) * x
+            a_squared = complex_lib.abs_squared(a)
+            x = sqrt_bound_derivative(1 - a_squared, 200) * x
+            # x = complex_lib.sqrt(1 - a_squared) * x
+            # x = jnp.sqrt(1 - complex_lib.abs_squared(a)) * x
 
         h, h_last = scan.linear_scan(
             x=x,
@@ -484,8 +475,6 @@ class RNNBlock(nn.Module):
                 reverse=True,
             )
         self.last_dense = nn.Dense(self.d_out)
-        if self.H.use_gating:
-            self.gate_dense = nn.Dense(self.d_out)
         self.norm = nn.LayerNorm()
 
     def __call__(self, x):
@@ -495,11 +484,7 @@ class RNNBlock(nn.Module):
         x = (x_fwd + self.backward(x)[0]) / 2 if self.bidirectional else x_fwd
         # x = x + identity if self.residual else x
 
-        x = nn.gelu(x)
-        if self.H.use_gating:
-            x = self.last_dense(x) * nn.sigmoid(self.gate_dense(x))
-        else:
-            x = self.last_dense(x)
+        x = self.last_dense(nn.gelu(x))
         x = x * self.last_scale
         x = x + identity if self.residual else x
         return x
