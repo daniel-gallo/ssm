@@ -7,26 +7,20 @@ from einops import rearrange
 from jax import lax, random
 
 from hps import Hyperparams
-from models.rnn import RNNBlock
+from models.recurrence import RNNBlock, RNNHyperparams
 
 
 @dataclasses.dataclass(frozen=True)
 class DiffusionHyperparams(Hyperparams):
+    rnn: RNNHyperparams = RNNHyperparams()
+
     d_timestep_embedding: int = 128
     d_blocks: Tuple[int, ...] = (64, 128)
+
     pool_factors: Tuple[int, ...] = (2, 2)
     num_temporal_blocks: int = 4
     num_convolutional_layers: int = 4
     diffusion_timesteps: int = 1000
-
-    rnn_block: str = "rglru"
-    rnn_init_minval: float = 0.9
-    rnn_init_maxval: float = 0.99
-    rnn_norm_input: bool = True
-    rnn_pos_embedding: bool = True
-    rnn_hidden_size: int = 128
-    rnn_n_diag_blocks: int = 1
-    scan_implementation: str = "linear_pallas"
 
     @property
     def model(self):
@@ -90,7 +84,7 @@ class TemporalMixingBlock(nn.Module):
         bs, seq_len, d = x.shape
         # Temporal module
         x = x + Gate()(c) * RNNBlock(
-            H=self.H, d_out=d, bidirectional=True, residual=False
+            H=self.H.rnn, d_out=d, bidirectional=True, residual=False
         )(ConditionedLayerNorm()(x, c))
 
         # MLP module
