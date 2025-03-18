@@ -7,27 +7,18 @@ from einops import rearrange, repeat
 from jax import lax, random
 
 from hps import Hyperparams
-from models.rnn import RNNBlock
+from models.recurrence import RNNBlock, RNNHyperparams
 
 
 @dataclasses.dataclass(frozen=True)
 class DiffusionHyperparams(Hyperparams):
+    rnn: RNNHyperparams = RNNHyperparams()
+
     x_dim: int = 96
     t_dim: int = 32
     pool_factors: Tuple[int, ...] = (2, 2)
     patch_size: int = 1
     diffusion_timesteps: int = 1000
-
-    rnn_block: str = "rglru"
-    rnn_init_minval: float = 0.9
-    rnn_init_maxval: float = 0.99
-    rnn_norm_input: bool = True
-    rnn_pos_embedding: bool = True
-    rnn_hidden_size: int = 128
-    rnn_n_diag_blocks: int = 1
-    scan_implementation: str = "linear_pallas"
-
-    use_gating: bool = False
 
     @property
     def model(self):
@@ -88,9 +79,9 @@ class ResBlock(nn.Module):
     def __call__(self, x):
         bs, seq_len, d = x.shape
         # Temporal module
-        x = x + RNNBlock(H=self.H, d_out=d, bidirectional=True, residual=False)(
-            nn.LayerNorm()(x)
-        )
+        x = x + RNNBlock(
+            H=self.H.rnn, d_out=d, bidirectional=True, residual=False
+        )(nn.LayerNorm()(x))
 
         # MLP module
         x = x + nn.Sequential(

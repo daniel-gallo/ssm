@@ -10,7 +10,8 @@ from jax import random
 from typing_extensions import Union
 
 from hps import Hyperparams
-from models.rnn import RNNBlock, lecun_normal
+from models.recurrence import RNNBlock, RNNHyperparams
+from models.recurrence.common import lecun_normal
 
 
 def gaussian_kl(q, p):
@@ -49,25 +50,17 @@ def loss_and_metrics(logits, kls, x):
 
 @dataclasses.dataclass(frozen=True)
 class VSSMHyperparams(Hyperparams):
+    rnn: RNNHyperparams = RNNHyperparams()
+
     encoder_rnn_layers: tuple[int, ...] = (2, 2, 2)
     decoder_rnn_layers: tuple[int, ...] = (3, 3, 3)
 
     zdim: int = 32
+    rnn_out_size: int = 64
 
     pool_scale: int = 4
     pool_features: int = 2
 
-    rnn_init_minval: float = 0.9
-    rnn_init_maxval: float = 0.99
-    rnn_init_imag: float = 0.1
-    rnn_norm_input: bool = True
-    rnn_hidden_size: int = 256
-    rnn_out_size: int = 64
-    rnn_pos_embedding: bool = True
-    rnn_block: str = "rglru"
-    rnn_only_real: bool = True
-
-    rnn_n_diag_blocks: int = 64
     use_gating: bool = False
 
     scan_implementation: str = "linear_pallas"
@@ -123,7 +116,7 @@ class DecoderBlock(nn.Module):
     def setup(self):
         zdim = self.H.zdim * (self.H.pool_features**self.location)
         out_size = self.H.rnn_out_size * (self.H.pool_features**self.location)
-        block = partial(RNNBlock, self.H)
+        block = partial(RNNBlock, self.H.rnn)
         self.q_block = block(
             d_out=zdim * 2,
             bidirectional=True,
@@ -275,15 +268,14 @@ class Encoder(nn.Module):
         # TODO: also expand the rnn hidden size
         H = self.H
         x = nn.Dense(
-            self.H.rnn_out_size,
-            bias_init=jax.nn.initializers.normal(0.5)
+            self.H.rnn_out_size, bias_init=jax.nn.initializers.normal(0.5)
         )(H.data_preprocess_fn(x))
         acts = []
         features = H.rnn_out_size
         for d in H.encoder_rnn_layers[:-1]:
             for _ in range(d):
                 x = RNNBlock(
-                    H=H,
+                    H=H.rnn,
                     d_out=features,
                     bidirectional=True,
                     residual=True,
@@ -294,7 +286,7 @@ class Encoder(nn.Module):
             x = DownPool(H)(x)
         for _ in range(H.encoder_rnn_layers[-1]):
             x = RNNBlock(
-                H=H,
+                H=H.rnn,
                 d_out=features,
                 bidirectional=True,
                 residual=True,

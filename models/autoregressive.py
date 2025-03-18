@@ -1,15 +1,13 @@
 import dataclasses
-from re import X
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from einops import rearrange
 from jax import lax, random
-from typing_extensions import Union
 
 from hps import Hyperparams
-from models.rnn import get_recurrent_block
+from models.recurrence import RNNHyperparams, get_recurrent_block
 
 
 def log_likelihood(logits, x):
@@ -38,29 +36,19 @@ def loss_and_metrics(logits, x):
 
 @dataclasses.dataclass(frozen=True)
 class ARHyperparams(Hyperparams):
+    rnn: RNNHyperparams = RNNHyperparams()
+
     pool_temporal: tuple[int, ...] = (4, 4)
     pool_features: tuple[int, ...] = (2, 2)
-
-    rnn_init_minval: float = 0.9
-    rnn_init_maxval: float = 0.99
-    rnn_init_imag: float = 0.1
-    rnn_norm_input: bool = True
-    rnn_hidden_size: int = 256
-    rnn_out_size: int = 64
-    rnn_pos_embedding: bool = False
-    rnn_block: str = "rglru"
-    rnn_only_real: bool = False
-
-    rnn_n_diag_blocks: int = 32
 
     use_norm: bool = True
     use_gating: bool = True
 
     base_dim: int = 64
+    rnn_hidden_size: int = 256
     ff_expand: int = 2
     rnn_last_scale: float = 0.125
     rnn_n_layers: int = 8
-    scan_implementation: str = "linear_pallas"
 
     @property
     def model(self):
@@ -145,9 +133,9 @@ class RNNBlock(nn.Module):
 
     @nn.compact
     def __call__(self, x, h_prev=None):
-        recurrent_block = get_recurrent_block(self.H)
+        recurrent_block = get_recurrent_block(self.H.rnn)
         x_fwd, _ = recurrent_block(
-            self.H,
+            self.H.rnn,
             d_hidden=self.H.rnn_hidden_size,
             d_out=self.d_out,
         )(x)
