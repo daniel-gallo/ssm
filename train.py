@@ -81,6 +81,7 @@ def cond(pred, true_val, false_val):
 @dataclass(frozen=True)
 class TrainState:
     weights: Any
+    weights_ema: Any
     optimizer_state: Any
     step: int
     rng: Any
@@ -95,7 +96,7 @@ def load_train_state(H: Hyperparams):
     )
 
     optimizer_state = H.optimizer.init(weights)
-    S = TrainState(weights, optimizer_state, 0, rng_train)
+    S = TrainState(weights, weights, optimizer_state, 0, rng_train)
 
     latest_checkpoint_path = checkpoints.latest_checkpoint(
         H.checkpoint_dir, H.checkpoint_prefix
@@ -128,13 +129,20 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
         gradval, S.optimizer_state, S.weights
     )
     weights_new = optax.apply_updates(S.weights, updates)
+    weights_ema_new = tree.map(
+        lambda w, e: (1 - H.ema_rate) * w + H.ema_rate * e,
+        weights_new,
+        S.weights_ema,
+    )
 
-    optimizer_state, weights = cond(
-        skip, (S.optimizer_state, S.weights), (optimizer_state_new, weights_new)
+    optimizer_state, weights, weights_ema = cond(
+        skip,
+        (S.optimizer_state, S.weights, S.weights_ema),
+        (optimizer_state_new, weights_new, weights_ema_new),
     )
 
     return (
-        TrainState(weights, optimizer_state, S.step + 1, rng),
+        TrainState(weights, weights_ema, optimizer_state, S.step + 1, rng),
         metrics,
     )
 
@@ -162,7 +170,7 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
 def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
     # TODO: use JAX rng instead of FLAX (temporary fix for the S4 code)
     _, metrics = H.model.apply(
-        S.weights, batch, rng_iter, rngs={"dropout": rng_iter}
+        S.weights_ema, batch, rng_iter, rngs={"dropout": rng_iter}
     )
     return metrics
 
