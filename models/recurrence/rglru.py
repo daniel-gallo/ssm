@@ -15,7 +15,7 @@ from models.recurrence.common import (
 from models.recurrence.hps import RNNHyperparams
 
 _mesh = jax.make_mesh((jax.device_count(),), ("batch",))
-SHARDING_SPEC = pallas.ShardingSpec(mesh=_mesh)
+SHARDING_SPEC = pallas.ShardingSpec(mesh=_mesh, batch_axis_name="batch")
 
 
 class RGLRU(nn.Module):
