@@ -192,7 +192,7 @@ def generate_samples(H: Hyperparams, S: TrainState):
         H,
         S.step,
         H.model.apply(
-            S.weights,
+            S.weights_ema,
             H.data_seq_length,
             H.num_samples_per_eval,
             S.rng,
