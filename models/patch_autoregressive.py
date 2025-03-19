@@ -1,4 +1,5 @@
 import dataclasses
+from typing import Literal
 
 import flax.linen as nn
 import jax
@@ -38,19 +39,22 @@ def loss_and_metrics(logits, x):
 class PatchARHyperparams(Hyperparams):
     rnn: RNNHyperparams = RNNHyperparams()
 
+    # Model architecture
     pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2, 2)
     pool_features: tuple[int, ...] = (1, 1, 1, 1, 1, 1)
+    conv_blocks: tuple[int, ...] = (4, 4, 4, 2, 2, 2)
+    temporal_blocks: tuple[int, ...] = (0, 0, 0, 0, 0, 2, 4)
 
     use_norm: bool = True
     use_gating: bool = True
+    use_temporal_cnn: bool = True
+    skip_residual: Literal["add", "mean", "mlp"] = "mlp"
 
     base_dim: int = 64
-    rnn_hidden_size: int = 256
+    rnn_hidden_size: int = 128
     ff_expand: int = 2
     cnn_kernel_size: int = 3
     block_last_scale: float = 0.125
-    rnn_n_layers: int = 4
-    cnn_n_layers: int = 2
 
     @property
     def model(self):
@@ -115,6 +119,7 @@ class ResBlock(nn.Module):
 class MLPBlock(nn.Module):
     H: PatchARHyperparams
     expand: int | None = None
+    reduce: int = 1
 
     @nn.compact
     def __call__(self, x):
@@ -126,26 +131,31 @@ class MLPBlock(nn.Module):
             z = z * nn.gelu(gated_x)
         else:
             z = nn.gelu(z)
-        return nn.Dense(dim)(z)
+        return nn.Dense(dim // self.reduce)(z)
 
 
-class RNNBlock(nn.Module):
+class TemporalMixingBlock(nn.Module):
     H: PatchARHyperparams
     d_out: int
 
     @nn.compact
     def __call__(self, x, h_prev=None):
         recurrent_block = get_recurrent_block(self.H.rnn)
-        x_fwd, _ = recurrent_block(
+        z = (
+            nn.Conv(self.d_out, self.H.cnn_kernel_size, padding="CAUSAL")(x)
+            if self.H.use_temporal_cnn
+            else x
+        )
+        z, _ = recurrent_block(
             self.H.rnn,
             d_hidden=self.H.rnn_hidden_size,
             d_out=self.d_out,
-        )(x)
+        )(z)
         if self.H.use_gating:
             gated_x = nn.Dense(self.d_out)(x)
-            x = x_fwd * nn.gelu(gated_x)
+            x = z * nn.gelu(gated_x)
         else:
-            x = nn.gelu(x_fwd)
+            x = nn.gelu(z)
         return nn.Dense(self.d_out)(x)
 
 
@@ -169,8 +179,10 @@ class ConvBlock(nn.Module):
 class SkipBlock(nn.Module):
     H: PatchARHyperparams
     inner_layer: nn.Module
-    pool_temporal: int
-    pool_feature: int
+    conv_blocks: int = 0
+    temporal_blocks: int = 0
+    pool_temporal: int = 1
+    pool_feature: int = 1
 
     @nn.compact
     def __call__(self, x):
@@ -188,9 +200,21 @@ class SkipBlock(nn.Module):
                 last_scale=last_scale,
             )
 
+        def _temporal_block(d_out, last_scale=1.0):
+            return ResBlock(
+                self.H,
+                layer=TemporalMixingBlock(self.H, d_out),
+                last_scale=last_scale,
+            )
+
         z = x
-        for _ in range(self.H.cnn_n_layers):
+
+        for _ in range(self.conv_blocks):
             z = _conv_block(self.H.ff_expand, self.H.block_last_scale)(z)
+            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(z)
+
+        for _ in range(self.temporal_blocks):
+            z = _temporal_block(z.shape[-1], self.H.block_last_scale)(z)
             z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(z)
 
         z = DownPool(
@@ -207,22 +231,35 @@ class SkipBlock(nn.Module):
             self.pool_feature,
         )(z)
 
-        for _ in range(self.H.cnn_n_layers):
+        for _ in range(self.temporal_blocks):
+            z = _temporal_block(z.shape[-1], self.H.block_last_scale)(z)
+            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(z)
+
+        for _ in range(self.conv_blocks):
             z = _conv_block(self.H.ff_expand, self.H.block_last_scale)(z)
             z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(z)
 
-        return x + z
+        match self.H.skip_residual:
+            case "add":
+                return x + z
+            case "mean":
+                return (x + z) / 2
+            case "mlp":
+                return MLPBlock(self.H, expand=1, reduce=2)(
+                    jnp.concatenate([x, z], axis=-1)
+                )
 
 
 class TemporalStack(nn.Module):
     H: PatchARHyperparams
+    temporal_blocks: int = 1
 
     @nn.compact
     def __call__(self, x):
-        def _rnn_block(d_out, last_scale=1.0):
+        def _temporal_block(d_out, last_scale=1.0):
             return ResBlock(
                 self.H,
-                layer=RNNBlock(self.H, d_out),
+                layer=TemporalMixingBlock(self.H, d_out),
                 last_scale=last_scale,
             )
 
@@ -233,8 +270,8 @@ class TemporalStack(nn.Module):
                 last_scale=last_scale,
             )
 
-        for _ in range(self.H.rnn_n_layers):
-            x = _rnn_block(x.shape[-1], self.H.block_last_scale)(x)
+        for _ in range(self.temporal_blocks):
+            x = _temporal_block(x.shape[-1], self.H.block_last_scale)(x)
             x = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(x)
 
         return x
@@ -248,14 +285,28 @@ class PatchARModel(nn.Module):
             self.H.base_dim,
             bias_init=jax.nn.initializers.normal(0.5),
         )
-        self.cls_mlp = nn.Dense(self.H.data_num_cats)
+        self.cls_mlp = nn.Sequential(
+            [
+                nn.Dense(self.H.data_num_cats),
+            ]
+        )
         self.norm = nn.LayerNorm()
 
-        block = TemporalStack(self.H)
-        for p_temporal, p_features in zip(
-            reversed(self.H.pool_temporal), reversed(self.H.pool_features)
+        block = TemporalStack(self.H, self.H.temporal_blocks[-1])
+        for p_temporal, p_features, conv_blocks, temp_blocks in zip(
+            reversed(self.H.pool_temporal),
+            reversed(self.H.pool_features),
+            reversed(self.H.conv_blocks),
+            reversed(self.H.temporal_blocks[:-1]),
         ):
-            block = SkipBlock(self.H, block, p_temporal, p_features)
+            block = SkipBlock(
+                self.H,
+                block,
+                conv_blocks=conv_blocks,
+                temporal_blocks=temp_blocks,
+                pool_temporal=p_temporal,
+                pool_feature=p_features,
+            )
         self.temporal_pyramid = block
 
     def evaluate(self, x):
@@ -268,6 +319,7 @@ class PatchARModel(nn.Module):
         x = self.temporal_pyramid(x)
 
         x = self.norm(x)
+
         return jnp.reshape(
             self.cls_mlp(x),
             (
