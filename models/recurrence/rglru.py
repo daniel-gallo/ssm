@@ -69,11 +69,12 @@ class RGLRU(nn.Module):
 
         log_a = -8.0 * gate_a * complex_lib.softplus(a_real_param)
         if self.H.only_real:
-            a = complex_lib.exp(log_a)
+            a, a_squared = complex_lib.exp(log_a), complex_lib.exp(2 * log_a)
         else:
             log_a_imag = a_imag_param * gate_a
             log_a_complex = real_imag_complex(self.H, log_a, log_a_imag)
             a = complex_lib.exp(log_a_complex)
+            a_squared = complex_lib.abs_squared(a)
 
         x = merged_to_complex(self.H, x)
         h_prev = (
@@ -86,7 +87,6 @@ class RGLRU(nn.Module):
         # TODO: placement of norm corresponding to RGLRU
         # reconsider doing it before gating
         if self.H.input_norm:
-            a_squared = complex_lib.abs_squared(a)
             x = sqrt_bound_derivative(1 - a_squared, 200) * x
 
         h, h_last = scan.linear_scan(

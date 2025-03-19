@@ -22,6 +22,7 @@ from hps import Hyperparams
 from models import (
     ARHyperparams,
     DiffusionHyperparams,
+    PatchARHyperparams,
     S4Hyperparams,
     VSSMHyperparams,
 )
@@ -247,6 +248,7 @@ def main():
         Annotated[VSSMHyperparams, tyro.conf.subcommand("vssm")]
         | Annotated[S4Hyperparams, tyro.conf.subcommand("s4")]
         | Annotated[ARHyperparams, tyro.conf.subcommand("ar")]
+        | Annotated[PatchARHyperparams, tyro.conf.subcommand("patch-ar")]
         | Annotated[DiffusionHyperparams, tyro.conf.subcommand("diffusion")]
     )
     H, data = load_data(H)
