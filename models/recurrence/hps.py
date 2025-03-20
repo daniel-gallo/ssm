@@ -9,8 +9,8 @@ class RNNHyperparams:
         "linear_pallas", "linear_native", "associative_native"
     ] = "linear_pallas"
 
-    d_hidden: int = 128
-    only_real: bool = True
+    d_hidden: int = 256
+    only_real: bool = False
     input_norm: bool = True
     pos_embedding: bool = False
     n_diag_blocks: int = 32
