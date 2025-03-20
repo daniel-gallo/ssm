@@ -1,5 +1,6 @@
 from models.autoregressive import ARHyperparams
 from models.diffusion import DiffusionHyperparams
+from models.flow_matching import FlowHyperparams
 from models.patch_autoregressive import PatchARHyperparams
 from models.s4 import S4Hyperparams
 from models.vssm import VSSMHyperparams
@@ -10,4 +11,5 @@ __all__ = [
     ARHyperparams,
     PatchARHyperparams,
     DiffusionHyperparams,
+    FlowHyperparams,
 ]

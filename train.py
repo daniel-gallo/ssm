@@ -22,6 +22,7 @@ from hps import Hyperparams
 from models import (
     ARHyperparams,
     DiffusionHyperparams,
+    FlowHyperparams,
     PatchARHyperparams,
     S4Hyperparams,
     VSSMHyperparams,
@@ -250,6 +251,7 @@ def main():
         | Annotated[ARHyperparams, tyro.conf.subcommand("ar")]
         | Annotated[PatchARHyperparams, tyro.conf.subcommand("patch-ar")]
         | Annotated[DiffusionHyperparams, tyro.conf.subcommand("diffusion")]
+        | Annotated[FlowHyperparams, tyro.conf.subcommand("flow")]
     )
     H, data = load_data(H)
     H.logprint("Loading train state")

@@ -2,8 +2,11 @@ import dataclasses
 from typing import Literal
 
 import flax.linen as nn
+import jax
 import jax.numpy as jnp
+import optax
 from einops import rearrange
+from jax import lax
 
 from hps import Hyperparams
 from models.recurrence import RNNHyperparams, get_recurrent_block
@@ -29,7 +32,8 @@ class FlowHyperparams(Hyperparams):
     rnn_hidden_size: int = 256
     ff_expand: int = 2
     cnn_kernel_size: int = 3
-    block_last_scale: float = 0.125
+
+    sampling_steps: int = 200
 
     @property
     def model(self):
@@ -41,8 +45,12 @@ class FlowHyperparams(Hyperparams):
 
 
 def get_timestep_embedding(t, d):
-    # TODO: implemennt timestep embedding
-    ...
+    half = d // 2
+
+    freqs = 2 * jnp.pi * (jnp.arange(half) + 1)
+    args = t[:, None] * freqs[None, :]
+    embedding = jnp.concatenate([jnp.cos(args), jnp.sin(args)], axis=-1)
+    return embedding
 
 
 class Pool(nn.Module):
@@ -291,6 +299,8 @@ class Backbone(nn.Module):
             ]
         )(get_timestep_embedding(t, self.H.d_cond))
 
+        x = nn.Dense(self.H.d_base)(x)
+
         block = TemporalStack(self.H, self.H.temporal_blocks[-1])
         for p_temporal, p_features, conv_blocks, temp_blocks in zip(
             reversed(self.H.pool_temporal),
@@ -304,9 +314,10 @@ class Backbone(nn.Module):
                 conv_blocks=conv_blocks,
                 temporal_blocks=temp_blocks,
                 pool_temporal=p_temporal,
-                pool_feature=p_features,
+                pool_features=p_features,
             )
-        return block(x, c)
+        x = block(x, c)
+        return nn.Dense(self.H.data_num_channels)(x)
 
 
 class FlowModel(nn.Module):
@@ -314,3 +325,53 @@ class FlowModel(nn.Module):
 
     def setup(self):
         self.backbone = Backbone(self.H)
+
+    def __call__(self, x, rng):
+        time_rng, noise_rng = jax.random.split(rng, 2)
+        bs, seq_len, c = x.shape
+
+        x_0 = self.H.data_preprocess_fn(x)
+        x_1 = jax.random.normal(noise_rng, shape=x_0.shape)
+
+        t = jax.random.uniform(
+            time_rng,
+            shape=bs,
+            minval=0,
+            maxval=1,
+        )
+
+        x_t = (1 - t) * x_0 + t * x_1
+        dx_t = x_1 - x_0
+
+        flow = self.backbone(x_t, t)
+        loss = optax.l2_loss(flow, dx_t).mean()
+        return loss, {"loss": loss}
+
+    def sample_prior(self, seq_len, bs, rng):
+        rng, noise_rng = jax.random.split(rng, 2)
+
+        x_t = jax.random.normal(
+            noise_rng,
+            shape=(bs, seq_len, self.H.data_num_channels),
+        )
+
+        def flow_step(rng, t_start):
+            # temporarily, using midpoint ODE solver
+            t_end = t_start + 1 / self.H.sampling_steps
+            dt = t_end - t_start
+            return x_t + dt * self.backbone(
+                x_t + self.backbone(x_t, t_start) * dt / 2, t_start + dt / 2
+            ), None
+
+        x_t, _ = lax.scan(
+            flow_step, x_t, jnp.arange(0, 1, self.H.sampling_steps)
+        )
+
+        # Make x_t [-1, 1] -> [0, 1]
+        x_t = x_t / 2 + 0.5
+        x_t = jnp.clip(x_t, 0, 0.9999)
+        # Make x_t contain ints with the class numbers (a bit ugly)
+        x_t = x_t * self.H.data_num_cats
+        x_t = jnp.floor(x_t).astype(jnp.int32)
+
+        return x_t
