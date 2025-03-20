@@ -3,19 +3,23 @@ from typing import Tuple
 
 import flax.linen as nn
 import jax.numpy as jnp
-from einops import rearrange, repeat
-from flax.typing import PRNGKey
+from einops import rearrange
 from jax import lax, random
-from jax.scipy.special import expit, logit
 
 from hps import Hyperparams
+from models.recurrence import RNNBlock, RNNHyperparams
 
 
 @dataclasses.dataclass(frozen=True)
 class DiffusionHyperparams(Hyperparams):
-    x_dim: int = 96
-    t_dim: int = 32
-    pool_factors: Tuple[int, ...] = (4, 4, 4, 2)
+    rnn: RNNHyperparams = RNNHyperparams()
+
+    d_timestep_embedding: int = 128
+    d_blocks: Tuple[int, ...] = (64, 128)
+
+    pool_factors: Tuple[int, ...] = (2, 2)
+    num_temporal_blocks: int = 4
+    num_convolutional_layers: int = 4
     diffusion_timesteps: int = 1000
 
     @property
@@ -35,6 +39,156 @@ def get_timestep_embedding(timesteps, d):
     args = timesteps[:, None] * freqs[None, :]
     embedding = jnp.concatenate([jnp.cos(args), jnp.sin(args)], axis=-1)
     return embedding
+
+
+class Identity(nn.Module):
+    def __call__(self, x, c):
+        return x
+
+
+class ConditionedLayerNorm(nn.Module):
+    @nn.compact
+    def __call__(self, x, c):
+        scale = nn.Dense(
+            features=1,
+            kernel_init=nn.initializers.zeros,
+            bias_init=nn.initializers.zeros,
+        )(c)[:, :, None]
+
+        bias = nn.Dense(
+            features=1,
+            kernel_init=nn.initializers.zeros,
+            bias_init=nn.initializers.zeros,
+        )(c)[:, :, None]
+
+        x = nn.LayerNorm(use_bias=False, use_scale=False)(x)
+        x = (1 + scale) * x + bias
+        return x
+
+
+class Gate(nn.Module):
+    @nn.compact
+    def __call__(self, c):
+        return nn.Dense(
+            features=1,
+            kernel_init=nn.initializers.zeros,
+            bias_init=nn.initializers.zeros,
+        )(c)[:, :, None]
+
+
+class TemporalMixingBlock(nn.Module):
+    H: DiffusionHyperparams
+
+    @nn.compact
+    def __call__(self, x, c):
+        bs, seq_len, d = x.shape
+        # Temporal module
+        x = x + Gate()(c) * RNNBlock(
+            H=self.H.rnn, d_out=d, bidirectional=True, residual=False
+        )(ConditionedLayerNorm()(x, c))
+
+        # MLP module
+        x = x + Gate()(c) * nn.Sequential(
+            [
+                nn.Dense(4 * d),
+                nn.gelu,
+                nn.Dense(d),
+            ]
+        )(ConditionedLayerNorm()(x, c))
+
+        return x
+
+
+class TemporalMixing(nn.Module):
+    H: DiffusionHyperparams
+
+    @nn.compact
+    def __call__(self, x, c):
+        for _ in range(self.H.num_temporal_blocks):
+            x = TemporalMixingBlock(self.H)(x, c)
+
+        return x
+
+
+class Pooling(nn.Module):
+    H: DiffusionHyperparams
+    factor: int
+    d: int
+    down: bool
+
+    @nn.compact
+    def __call__(self, x, c):
+        if self.down:
+            x = rearrange(
+                x, "... (l factor) d -> ... l (factor d) ", factor=self.factor
+            )
+        else:
+            x = rearrange(
+                x, "... l (factor d) -> ... (l factor) d", factor=self.factor
+            )
+
+        x = nn.Dense(self.d)(x)
+
+        if self.H.num_convolutional_layers > 0:
+            skip = x
+            for _ in range(self.H.num_convolutional_layers):
+                x = nn.Conv(
+                    features=self.d, kernel_size=self.factor, padding="SAME"
+                )(x)
+                x = ConditionedLayerNorm()(x, c)
+                x = nn.gelu(x)
+            x = skip + Gate()(c) * x
+
+        return x
+
+
+class SkipBlock(nn.Module):
+    H: Hyperparams
+    inner: nn.Module
+    factor: int
+    inner_d: int
+
+    @nn.compact
+    def __call__(self, x, c):
+        bs, seq_len, d = x.shape
+
+        skip = x
+        x = Pooling(self.H, self.factor, self.inner_d, down=True)(x, c)
+
+        x = self.inner(x, c)
+
+        x = Pooling(self.H, self.factor, d, down=False)(x, c)
+        x = skip + Gate()(c) * x
+
+        return x
+
+
+class Backbone(nn.Module):
+    H: DiffusionHyperparams
+
+    @nn.compact
+    def __call__(self, x, t):
+        bs, seq_len, d = x.shape
+
+        # Conditioning vector (only time at the moment)
+        c = nn.Sequential(
+            [
+                nn.Dense(self.H.d_timestep_embedding),
+                nn.gelu,
+                nn.Dense(self.H.d_timestep_embedding),
+                nn.gelu,
+            ]
+        )(get_timestep_embedding(t, self.H.d_timestep_embedding))
+
+        # Construct SkipBlock
+        block = TemporalMixing(self.H)
+        for factor, d in zip(
+            reversed(self.H.pool_factors), reversed(self.H.d_blocks)
+        ):
+            block = SkipBlock(self.H, block, factor, d)
+
+        x = block(x, c)
+        return x
 
 
 @dataclasses.dataclass
@@ -68,161 +222,6 @@ class NoiseScheduler(nn.Module):
 
         x_prev = jnp.where(t > 0, x_prev + sigma_t * z, x_prev)
         return x_prev
-
-
-class DiagonalCell(nn.RNNCellBase):
-    @nn.compact
-    def __call__(self, h, x):
-        batch_size, d = x.shape
-
-        def stable_init(rng, shape):
-            return logit(
-                random.uniform(key=rng, shape=shape, minval=0.4, maxval=0.99)
-            )
-
-        log_a = self.param("log_a", stable_init, (d,))
-        a = expit(log_a)
-
-        x = jnp.sqrt(1 - a**2) * x
-        h = a * h + x
-        return (h, h)
-
-    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
-        return jnp.zeros(input_shape)
-
-    @property
-    def num_feature_axes(self) -> int:
-        return 1
-
-
-class RecurrentBlock(nn.Module):
-    @nn.compact
-    def __call__(self, x):
-        bs, seq_len, d = x.shape
-
-        pos_embedding = get_timestep_embedding(jnp.arange(seq_len), d)
-        pos_embedding = repeat(
-            pos_embedding, "seq_len d -> bs seq_len d", bs=bs
-        )
-        x = x + pos_embedding
-
-        forward_rnn = nn.recurrent.RNN(DiagonalCell())
-        backward_rnn = nn.recurrent.RNN(DiagonalCell())
-        x = nn.Bidirectional(forward_rnn, backward_rnn)(x)
-        x = nn.Dense(d)(x)
-        assert x.shape == (bs, seq_len, d)
-        return x
-
-
-class ResBlock(nn.Module):
-    @nn.compact
-    def __call__(self, x):
-        bs, seq_len, d = x.shape
-        # Temporal module
-        x = x + RecurrentBlock()(nn.LayerNorm()(x))
-
-        # MLP module
-        x = x + nn.Sequential(
-            [
-                nn.Dense(4 * d),
-                nn.gelu,
-                nn.Dense(d),
-            ]
-        )(nn.LayerNorm()(x))
-        return x
-
-
-class DownSample(nn.Module):
-    factor: int
-
-    @nn.compact
-    def __call__(self, x):
-        bs, seq_len, d = x.shape
-        x = rearrange(
-            x, "... (l factor) d -> ... l (factor d) ", factor=self.factor
-        )
-        x = nn.Dense(d)(x)
-        return x
-
-
-class UpSample(nn.Module):
-    factor: int
-
-    @nn.compact
-    def __call__(self, x):
-        bs, seq_len, d = x.shape
-        x = rearrange(
-            x, "... l (factor d) -> ... (l factor) d", factor=self.factor
-        )
-        x = nn.Dense(d)(x)
-        return x
-
-
-class SkipBlock(nn.Module):
-    inner: nn.Module
-    factor: int
-
-    @nn.compact
-    def __call__(self, x):
-        bs, seq_len, d = x.shape
-        x = ResBlock()(x)
-        skip = x
-
-        x = DownSample(self.factor)(x)
-        x = self.inner(x)
-        x = UpSample(self.factor)(x)
-
-        x = nn.Dense(d)(jnp.concatenate([x, skip], axis=-1))
-        x = ResBlock()(x)
-
-        return x
-
-
-class Backbone(nn.Module):
-    H: DiffusionHyperparams
-
-    @nn.compact
-    def __call__(self, x_t, t):
-        bs, seq_len, c = x_t.shape
-
-        x_t = nn.Sequential(
-            [
-                nn.Dense(self.H.x_dim),
-                nn.gelu,
-                nn.Dense(self.H.x_dim),
-                nn.gelu,
-                nn.Dense(self.H.x_dim),
-            ]
-        )(x_t)
-
-        x_t = nn.Dense(self.H.x_dim)(x_t)
-
-        # TODO: t_embedding is being passed to every token,
-        # unlike UViT for example (but they have attention, ofc)
-        t_embedding = get_timestep_embedding(t, self.H.t_dim)
-        t_embedding = repeat(
-            t_embedding, "bs d -> bs seq_len d", seq_len=seq_len
-        )
-
-        x = jnp.concatenate([x_t, t_embedding], axis=-1)
-
-        # Construct skipblock
-        block = ResBlock()
-        for factor in reversed(self.H.pool_factors):
-            block = SkipBlock(block, factor)
-
-        x = block(x)
-
-        x = nn.Sequential(
-            [
-                nn.Dense(self.H.x_dim),
-                nn.gelu,
-                nn.Dense(self.H.x_dim),
-                nn.gelu,
-                nn.Dense(c),
-            ]
-        )(x)
-        return x
 
 
 class DiffusionModel(nn.Module):
@@ -278,9 +277,5 @@ class DiffusionModel(nn.Module):
         # Make x_t contain ints with the class numbers (a bit ugly)
         x_t = x_t * self.H.data_num_cats
         x_t = jnp.floor(x_t).astype(jnp.int32)
-        # Make x_t one-hot-encoded
-        x_t = nn.one_hot(x_t, num_classes=self.H.data_num_cats)
-        # TODO: this is a fix until the sampling process is fixed upstream
-        x_t = x_t.squeeze()
 
         return x_t

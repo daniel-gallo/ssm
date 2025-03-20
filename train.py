@@ -13,8 +13,7 @@ import optax
 import tyro
 from flax.jax_utils import replicate, unreplicate
 from flax.training import checkpoints
-from jax import lax, random, tree_util
-from jax.tree_util import tree_leaves
+from jax import lax, random, tree, tree_util
 from jax.util import safe_map
 
 from data import load_data, save_samples
@@ -22,6 +21,7 @@ from hps import Hyperparams
 from models import (
     ARHyperparams,
     DiffusionHyperparams,
+    PatchARHyperparams,
     S4Hyperparams,
     VSSMHyperparams,
 )
@@ -46,15 +46,15 @@ def get_epoch(step, batch_size, data_size):
 
 
 def accum_metrics(metrics):
-    return tree_util.tree_map(lambda *args: jnp.mean(jnp.array(args)), *metrics)
+    return tree.map(lambda *args: jnp.mean(jnp.array(args)), *metrics)
 
 
 def prepend_to_keys(d, s):
-    return {s + k: v for k, v in d.items()}
+    return {s + k: d[k] for k in d}
 
 
 def clip_grad(H: Hyperparams, g, metrics):
-    g_flat, treedef = tree_util.tree_flatten(g)
+    g_flat, treedef = tree.flatten(g)
     norm = jnp.linalg.norm(jnp.array(map(jnp.linalg.norm, g_flat)))
     clip_coeff = (
         jnp.minimum(H.grad_clip / (norm + 1e-6), 1) if H.grad_clip else 1
@@ -73,13 +73,14 @@ def clip_grad(H: Hyperparams, g, metrics):
 
 
 def cond(pred, true_val, false_val):
-    return tree_util.tree_map(partial(jnp.where, pred), true_val, false_val)
+    return tree.map(partial(jnp.where, pred), true_val, false_val)
 
 
-@jax.tree_util.register_dataclass
+@tree_util.register_dataclass
 @dataclass(frozen=True)
 class TrainState:
     weights: Any
+    weights_ema: Any
     optimizer_state: Any
     step: int
     rng: Any
@@ -94,7 +95,7 @@ def load_train_state(H: Hyperparams):
     )
 
     optimizer_state = H.optimizer.init(weights)
-    S = TrainState(weights, optimizer_state, 0, rng_train)
+    S = TrainState(weights, weights, optimizer_state, 0, rng_train)
 
     latest_checkpoint_path = checkpoints.latest_checkpoint(
         H.checkpoint_dir, H.checkpoint_prefix
@@ -130,13 +131,20 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
         gradval, S.optimizer_state, S.weights
     )
     weights_new = optax.apply_updates(S.weights, updates)
+    weights_ema_new = tree.map(
+        lambda w, e: (1 - H.ema_rate) * w + H.ema_rate * e,
+        weights_new,
+        S.weights_ema,
+    )
 
-    optimizer_state, weights = cond(
-        skip, (S.optimizer_state, S.weights), (optimizer_state_new, weights_new)
+    optimizer_state, weights, weights_ema = cond(
+        skip,
+        (S.optimizer_state, S.weights, S.weights_ema),
+        (optimizer_state_new, weights_new, weights_ema_new),
     )
 
     return (
-        TrainState(weights, optimizer_state, S.step + 1, rng),
+        TrainState(weights, weights_ema, optimizer_state, S.step + 1, rng),
         metrics,
     )
 
@@ -165,7 +173,7 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
 def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
     # TODO: use JAX rng instead of FLAX (temporary fix for the S4 code)
     _, metrics = H.model.apply(
-        S.weights, batch, rng_iter, rngs={"dropout": rng_iter}
+        S.weights_ema, batch, rng_iter, rngs={"dropout": rng_iter}
     )
     return lax.pmean(metrics, "batch")
 
@@ -188,7 +196,7 @@ def generate_samples(H: Hyperparams, S: TrainState):
         H,
         S.step,
         H.model.apply(
-            S.weights,
+            S.weights_ema,
             H.data_seq_length,
             H.num_samples_per_eval,
             S.rng,
@@ -227,9 +235,10 @@ def log_configuration(H: Hyperparams, S: TrainState):
         import wandb
 
         config = dataclasses.asdict(H)
-        num_parameters = sum(leaf.size for leaf in tree_leaves(S.weights))
+        num_parameters = sum(leaf.size for leaf in tree.leaves(S.weights))
         H.logprint(f"Number of parameters: {num_parameters}")
         config["num_parameters"] = num_parameters
+        config["model"] = H.model.__class__.__name__
 
         wandb.init(
             config=config,
@@ -242,6 +251,7 @@ def main():
         Annotated[VSSMHyperparams, tyro.conf.subcommand("vssm")]
         | Annotated[S4Hyperparams, tyro.conf.subcommand("s4")]
         | Annotated[ARHyperparams, tyro.conf.subcommand("ar")]
+        | Annotated[PatchARHyperparams, tyro.conf.subcommand("patch-ar")]
         | Annotated[DiffusionHyperparams, tyro.conf.subcommand("diffusion")]
     )
     H, data = load_data(H)

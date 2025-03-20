@@ -10,7 +10,8 @@ from jax import random
 from typing_extensions import Union
 
 from hps import Hyperparams
-from models.rnn import RNNBlock, lecun_normal
+from models.recurrence import RNNBlock, RNNHyperparams
+from models.recurrence.common import lecun_normal
 
 
 def gaussian_kl(q, p):
@@ -49,21 +50,18 @@ def loss_and_metrics(logits, kls, x):
 
 @dataclasses.dataclass(frozen=True)
 class VSSMHyperparams(Hyperparams):
-    encoder_rnn_layers: tuple[int, ...] = (2, 2)
-    decoder_rnn_layers: tuple[int, ...] = (2, 2)
+    rnn: RNNHyperparams = RNNHyperparams()
 
-    zdim: int = 8
+    encoder_rnn_layers: tuple[int, ...] = (2, 2, 2)
+    decoder_rnn_layers: tuple[int, ...] = (3, 3, 3)
 
-    pool_scale: int = 28
+    zdim: int = 32
+    rnn_out_size: int = 64
+
+    pool_scale: int = 4
     pool_features: int = 2
 
-    rnn_init_minval: float = 0.4
-    rnn_init_maxval: float = 0.99
-    rnn_norm_input: bool = True
-    rnn_hidden_size: int = 128
-    rnn_out_size: int = 16
-    rnn_pos_embedding: bool = True
-    rnn_block: str = "rnn"
+    use_gating: bool = False
 
     scan_implementation: str = "linear_pallas"
 
@@ -118,7 +116,7 @@ class DecoderBlock(nn.Module):
     def setup(self):
         zdim = self.H.zdim * (self.H.pool_features**self.location)
         out_size = self.H.rnn_out_size * (self.H.pool_features**self.location)
-        block = partial(RNNBlock, self.H)
+        block = partial(RNNBlock, self.H.rnn)
         self.q_block = block(
             d_out=zdim * 2,
             bidirectional=True,
@@ -138,7 +136,9 @@ class DecoderBlock(nn.Module):
             last_scale=1.0 / np.sqrt(self.n_layers),
         )
         self.z_proj = nn.Dense(
-            out_size, kernel_init=lecun_normal(1 / np.sqrt(self.n_layers))
+            # out_size, kernel_init=lecun_normal(1 / np.sqrt(self.n_layers))
+            out_size,
+            kernel_init=lecun_normal(1.0),
         )
         if self.up_pool:
             self.up_pool_ = UpPool(self.H)
@@ -248,8 +248,16 @@ class Decoder(nn.Module):
         for block in self.blocks:
             rng, block_rng = random.split(rng)
             x = block.sample_prior(x, block_rng)
-        x = self.final(x)
-        return x
+        x = jnp.reshape(
+            self.final(x),
+            (
+                n_samples,
+                gen_len,
+                self.H.data_num_channels,
+                self.H.data_num_cats,
+            ),
+        )
+        return random.categorical(rng, x, -1)
 
 
 class Encoder(nn.Module):
@@ -259,13 +267,15 @@ class Encoder(nn.Module):
     def __call__(self, x):
         # TODO: also expand the rnn hidden size
         H = self.H
-        x = nn.Dense(self.H.rnn_out_size)(H.data_preprocess_fn(x))
+        x = nn.Dense(
+            self.H.rnn_out_size, bias_init=jax.nn.initializers.normal(0.5)
+        )(H.data_preprocess_fn(x))
         acts = []
         features = H.rnn_out_size
         for d in H.encoder_rnn_layers[:-1]:
             for _ in range(d):
                 x = RNNBlock(
-                    H=H,
+                    H=H.rnn,
                     d_out=features,
                     bidirectional=True,
                     residual=True,
@@ -276,7 +286,7 @@ class Encoder(nn.Module):
             x = DownPool(H)(x)
         for _ in range(H.encoder_rnn_layers[-1]):
             x = RNNBlock(
-                H=H,
+                H=H.rnn,
                 d_out=features,
                 bidirectional=True,
                 residual=True,
