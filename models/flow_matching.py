@@ -17,10 +17,15 @@ class FlowHyperparams(Hyperparams):
     rnn: RNNHyperparams = RNNHyperparams()
 
     # Model architecture
-    pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2)
-    pool_features: tuple[int, ...] = (1, 1, 1, 1, 1)
-    conv_blocks: tuple[int, ...] = (4, 4, 4, 2, 2)
-    temporal_blocks: tuple[int, ...] = (0, 0, 0, 2, 2, 4)
+    # pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2)
+    # pool_features: tuple[int, ...] = (1, 1, 1, 1, 1)
+    # conv_blocks: tuple[int, ...] = (4, 4, 4, 2, 2)
+    # temporal_blocks: tuple[int, ...] = (0, 0, 0, 2, 2, 4)
+    #
+    pool_temporal: tuple[int, ...] = (2, 2, 2)
+    pool_features: tuple[int, ...] = (1, 1, 1)
+    conv_blocks: tuple[int, ...] = (4, 4, 4)
+    temporal_blocks: tuple[int, ...] = (0, 0, 2, 4)
 
     use_norm: bool = True
     use_inner_gating: bool = True
@@ -48,9 +53,8 @@ def get_timestep_embedding(t, d):
     half = d // 2
 
     freqs = 2 * jnp.pi * (jnp.arange(half) + 1)
-    args = t[:, None] * freqs[None, :]
-    embedding = jnp.concatenate([jnp.cos(args), jnp.sin(args)], axis=-1)
-    return embedding
+    args = t * freqs[None, :]
+    return jnp.concatenate([jnp.cos(args), jnp.sin(args)], axis=-1)
 
 
 class Pool(nn.Module):
@@ -70,7 +74,7 @@ class Pool(nn.Module):
             )
             x = nn.Dense(d * self.pool_features)(x)
         else:
-            x = nn.Dense((d * self.pool_temporal) // self.pool_features)
+            x = nn.Dense((d * self.pool_temporal) // self.pool_features)(x)
             x = rearrange(
                 x,
                 "... l (factor d) -> ... (l factor) d",
@@ -86,13 +90,13 @@ class ConditionedLayerNorm(nn.Module):
             features=1,
             kernel_init=nn.initializers.zeros,
             bias_init=nn.initializers.zeros,
-        )(c)[:, :, None]
+        )(c)
 
         bias = nn.Dense(
             features=1,
             kernel_init=nn.initializers.zeros,
             bias_init=nn.initializers.zeros,
-        )(c)[:, :, None]
+        )(c)
 
         x = nn.LayerNorm(use_bias=False, use_scale=False)(x)
         x = (1 + scale) * x + bias
@@ -106,7 +110,7 @@ class Gate(nn.Module):
             features=1,
             kernel_init=nn.initializers.zeros,
             bias_init=nn.initializers.zeros,
-        )(c)[:, :, None]
+        )(c)
 
 
 class DenseBlock(nn.Module):
@@ -203,7 +207,7 @@ class TemporalMixingBlock(nn.Module):
             x = x * nn.gelu(gate_x)
         else:
             x = nn.gelu(x)
-        return nn.Dense(self.d_out)(x)
+        return nn.Dense(d)(x)
 
 
 class ResBlock(nn.Module):
@@ -241,7 +245,6 @@ class SkipBlock(nn.Module):
     @nn.compact
     def __call__(self, x, c):
         skip = x
-        x = self.layer(x, c)
 
         def _conv_block(x, c):
             x = ResBlock(self.H, inner=ConvBlock(self.H))(x, c)
@@ -272,7 +275,7 @@ class SkipBlock(nn.Module):
             pool_temporal=self.pool_temporal,
             pool_features=self.pool_features,
             down=False,
-        )
+        )(x)
 
         for _ in range(self.temporal_blocks):
             x = _temporal_block(x, c)
@@ -298,7 +301,6 @@ class Backbone(nn.Module):
                 nn.gelu,
             ]
         )(get_timestep_embedding(t, self.H.d_cond))
-
         x = nn.Dense(self.H.d_base)(x)
 
         block = TemporalStack(self.H, self.H.temporal_blocks[-1])
@@ -329,17 +331,15 @@ class FlowModel(nn.Module):
     def __call__(self, x, rng):
         time_rng, noise_rng = jax.random.split(rng, 2)
         bs, seq_len, c = x.shape
-
         x_0 = self.H.data_preprocess_fn(x)
         x_1 = jax.random.normal(noise_rng, shape=x_0.shape)
 
         t = jax.random.uniform(
             time_rng,
-            shape=bs,
+            shape=(bs, 1, 1),
             minval=0,
             maxval=1,
         )
-
         x_t = (1 - t) * x_0 + t * x_1
         dx_t = x_1 - x_0
 
@@ -355,8 +355,9 @@ class FlowModel(nn.Module):
             shape=(bs, seq_len, self.H.data_num_channels),
         )
 
-        def flow_step(rng, t_start):
+        def flow_step(x_t, t):
             # temporarily, using midpoint ODE solver
+            t_start = jnp.reshape(t, (1, 1, 1))
             t_end = t_start + 1 / self.H.sampling_steps
             dt = t_end - t_start
             return x_t + dt * self.backbone(
@@ -364,7 +365,9 @@ class FlowModel(nn.Module):
             ), None
 
         x_t, _ = lax.scan(
-            flow_step, x_t, jnp.arange(0, 1, self.H.sampling_steps)
+            flow_step,
+            x_t,
+            jnp.linspace(0, 1, self.H.sampling_steps, endpoint=False),
         )
 
         # Make x_t [-1, 1] -> [0, 1]
