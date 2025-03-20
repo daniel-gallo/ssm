@@ -1,10 +1,10 @@
 jax
 numpy
+scipy
 tyro
 flax
 optax
 pytest
 einops
 pillow
-soundfile
 wandb
