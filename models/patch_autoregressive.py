@@ -48,10 +48,10 @@ class PatchARHyperparams(Hyperparams):
     use_norm: bool = True
     use_gating: bool = True
     use_temporal_cnn: bool = True
-    skip_residual: Literal["add", "mean", "mlp"] = "mlp"
+    skip_residual: Literal["add", "mean", "mlp"] = "add"
 
     base_dim: int = 64
-    rnn_hidden_size: int = 128
+    rnn_hidden_size: int = 256
     ff_expand: int = 2
     cnn_kernel_size: int = 3
     block_last_scale: float = 0.125
@@ -142,7 +142,9 @@ class TemporalMixingBlock(nn.Module):
     def __call__(self, x, h_prev=None):
         recurrent_block = get_recurrent_block(self.H.rnn)
         z = (
-            nn.Conv(self.d_out, self.H.cnn_kernel_size, padding="CAUSAL")(x)
+            nn.LayerNorm()(
+                nn.Conv(self.d_out, self.H.cnn_kernel_size, padding="CAUSAL")(x)
+            )
             if self.H.use_temporal_cnn
             else x
         )
@@ -287,6 +289,8 @@ class PatchARModel(nn.Module):
         )
         self.cls_mlp = nn.Sequential(
             [
+                ConvBlock(self.H, expand=2),
+                ConvBlock(self.H, expand=2),
                 nn.Dense(self.H.data_num_cats),
             ]
         )
