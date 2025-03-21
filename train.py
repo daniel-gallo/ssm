@@ -1,11 +1,11 @@
 import dataclasses
 import os
 import time
-from dataclasses import dataclass
 from functools import partial
 from os import path
 from typing import Annotated, Any
 
+import flax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -27,6 +27,7 @@ from models import (
     VSSMHyperparams,
 )
 
+flax.config.update("flax_use_orbax_checkpointing", False)
 map = safe_map
 _mesh = jax.make_mesh((jax.device_count(),), ("batch",))
 SHARDING_REPLICATED = NamedSharding(_mesh, P())
@@ -39,6 +40,43 @@ def reshape_batches(batch_size, data):
         data[: batch_size * num_batches],
         (num_batches, batch_size) + data.shape[1:],
     )
+
+
+@tree_util.register_dataclass
+@dataclasses.dataclass(frozen=True)
+class TrainState:
+    weights: Any
+    weights_ema: Any
+    optimizer_state: Any
+    step: int
+    rng: Any
+
+
+def save_checkpoint(H: Hyperparams, S: TrainState):
+    H.logprint("Saving checkpoint", step=S.step)
+    checkpoints.save_checkpoint(
+        H.checkpoint_dir,
+        dataclasses.asdict(S),
+        S.step,
+        H.checkpoint_prefix,
+    )
+
+
+def restore_checkpoint(H: Hyperparams, S: TrainState):
+    latest_checkpoint_path = checkpoints.latest_checkpoint(
+        H.checkpoint_dir, H.checkpoint_prefix
+    )
+    if latest_checkpoint_path is not None:
+        S_dict = checkpoints.restore_checkpoint(
+            H.checkpoint_dir,
+            target=dataclasses.asdict(S),
+            prefix=H.checkpoint_prefix,
+        )
+        S = TrainState(**S_dict)
+        H.logprint(f"Checkpoint restored from {latest_checkpoint_path}")
+    else:
+        H.logprint("No checkpoint found")
+    return S
 
 
 def get_epoch(step, batch_size, data_size):
@@ -78,16 +116,6 @@ def cond(pred, true_val, false_val):
     return tree.map(partial(jnp.where, pred), true_val, false_val)
 
 
-@tree_util.register_dataclass
-@dataclass(frozen=True)
-class TrainState:
-    weights: Any
-    weights_ema: Any
-    optimizer_state: Any
-    step: int
-    rng: Any
-
-
 def load_train_state(H: Hyperparams):
     rng_init, rng_train = random.split(random.PRNGKey(H.seed))
     weights = H.model.init(
@@ -98,17 +126,7 @@ def load_train_state(H: Hyperparams):
 
     optimizer_state = H.optimizer.init(weights)
     S = TrainState(weights, weights, optimizer_state, 0, rng_train)
-
-    latest_checkpoint_path = checkpoints.latest_checkpoint(
-        H.checkpoint_dir, H.checkpoint_prefix
-    )
-    if latest_checkpoint_path is not None:
-        S = checkpoints.restore_checkpoint(
-            path.abspath(H.checkpoint_dir), target=S, prefix=H.checkpoint_prefix
-        )
-        H.logprint(f"Checkpoint restored from {latest_checkpoint_path}")
-    else:
-        H.logprint("No checkpoint found")
+    S = restore_checkpoint(H, S)
     S = jax.device_put(S, SHARDING_REPLICATED)
     return S
 
@@ -211,10 +229,7 @@ def train(H: Hyperparams, S: TrainState, data):
     for e in range(start_epoch, H.num_epochs):
         S = train_epoch(H, S, data_train)
         if (time.time() - t_last_checkpoint) / 60 > H.mins_per_checkpoint:
-            H.logprint("Saving checkpoint", step=S.step)
-            checkpoints.save_checkpoint(
-                path.abspath(H.checkpoint_dir), S, S.step, H.checkpoint_prefix
-            )
+            save_checkpoint(H, S)
             t_last_checkpoint = time.time()
         if not (e + 1) % H.epochs_per_eval:
             H.log(S.step, eval(H, S, data_test))
