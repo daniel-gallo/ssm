@@ -5,6 +5,8 @@ from zlib import adler32
 
 import flax.linen as nn
 import optax
+import orbax
+from flax.training import orbax_utils
 from optax.schedules import Schedule
 
 from log_util import logprint
@@ -138,6 +140,32 @@ class Hyperparams:
     @property
     def checkpoint_prefix(self):
         return self.id + "_"
+
+    @property
+    def _checkpoint_mgr(self):
+        checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+        options = orbax.checkpoint.CheckpointManagerOptions(
+            max_to_keep=1, create=True
+        )
+        return orbax.checkpoint.CheckpointManager(
+            self.checkpoint_dir + self.id, checkpointer, options
+        )
+
+    def restore_checkpoint(self, S):
+        step = self._checkpoint_mgr.latest_step()
+        if step:
+            S = self._checkpoint_mgr.restore(step, items=S)
+            self.logprint(f"Checkpoint restored from step {step}")
+        else:
+            self.logprint("No checkpoint found")
+        return S
+
+    def save_checkpoint(self, S):
+        self.logprint("Saving checkpoint", step=S.step)
+        save_args = orbax_utils.save_args_from_target(S)
+        self._checkpoint_mgr.save(
+            S.step, S, save_kwargs={"save_args": save_args}
+        )
 
     @property
     @abstractmethod

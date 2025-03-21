@@ -11,7 +11,6 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import tyro
-from flax.training import checkpoints
 from jax import random, tree, tree_util
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -98,17 +97,7 @@ def load_train_state(H: Hyperparams):
 
     optimizer_state = H.optimizer.init(weights)
     S = TrainState(weights, weights, optimizer_state, 0, rng_train)
-
-    latest_checkpoint_path = checkpoints.latest_checkpoint(
-        H.checkpoint_dir, H.checkpoint_prefix
-    )
-    if latest_checkpoint_path is not None:
-        S = checkpoints.restore_checkpoint(
-            path.abspath(H.checkpoint_dir), target=S, prefix=H.checkpoint_prefix
-        )
-        H.logprint(f"Checkpoint restored from {latest_checkpoint_path}")
-    else:
-        H.logprint("No checkpoint found")
+    S = H.restore_checkpoint(S)
     S = jax.device_put(S, SHARDING_REPLICATED)
     return S
 
@@ -211,10 +200,7 @@ def train(H: Hyperparams, S: TrainState, data):
     for e in range(start_epoch, H.num_epochs):
         S = train_epoch(H, S, data_train)
         if (time.time() - t_last_checkpoint) / 60 > H.mins_per_checkpoint:
-            H.logprint("Saving checkpoint", step=S.step)
-            checkpoints.save_checkpoint(
-                path.abspath(H.checkpoint_dir), S, S.step, H.checkpoint_prefix
-            )
+            H.save_checkpoint(S)
             t_last_checkpoint = time.time()
         if not (e + 1) % H.epochs_per_eval:
             H.log(S.step, eval(H, S, data_test))
