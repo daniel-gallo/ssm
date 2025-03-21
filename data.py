@@ -12,6 +12,8 @@ import jax.numpy as jnp
 import numpy as np
 from PIL import Image
 from scipy.io import wavfile
+from scipy.fft import fft, fftfreq
+import matplotlib.pyplot as plt
 
 from hps import Hyperparams
 
@@ -405,3 +407,39 @@ def save_audio(H: Hyperparams, step, samples):
         import wandb
 
         wandb.log({"samples": [wandb.Audio(f) for f in sample_filenames]}, step)
+
+
+def plot_sc09_spectrum(data_dir, filename):
+    data_dir = Path(data_dir)
+    base_dir = data_dir / "sc09"
+    zip_file = data_dir / "sc09.zip"
+    if not zip_file.exists():
+        urlretrieve(
+            "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip",
+            zip_file,
+        )
+
+    if not base_dir.exists():
+        unzip(H, zip_file, data_dir)
+
+    testing_list = base_dir / "testing_list.txt"
+    validation_list = base_dir / "validation_list.txt"
+    test_tracks = set(
+        testing_list.read_text().splitlines()
+        + validation_list.read_text().splitlines()
+    )
+
+    train = []
+    for track in base_dir.glob("**/*.wav"):
+        if f"{track.parent.name}/{track.name}" not in test_tracks:
+            train.append(wav_to_np(track))
+
+    f = np.array([fft(t) for t in train if t.shape == (16000,)])
+
+    N = 16000
+    # sample spacing
+    T = 1 / 16000
+    x = np.linspace(0.0, N*T, N, endpoint=False)
+    xf = fftfreq(N, T)[:N//2]
+    plt.plot(xf[:N//2], np.mean(np.log(2.0/N * np.abs(f[:, :N//2])), 0), '-b')
+    plt.savefig(filename)
