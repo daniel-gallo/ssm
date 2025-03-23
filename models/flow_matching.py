@@ -17,24 +17,25 @@ class FlowHyperparams(Hyperparams):
     rnn: RNNHyperparams = RNNHyperparams()
 
     # Model architecture
-    # pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2)
-    # pool_features: tuple[int, ...] = (1, 1, 1, 1, 1)
-    # conv_blocks: tuple[int, ...] = (4, 4, 4, 2, 2)
-    # temporal_blocks: tuple[int, ...] = (0, 0, 0, 2, 2, 4)
-    #
-    pool_temporal: tuple[int, ...] = (2, 2, 2)
-    pool_features: tuple[int, ...] = (1, 1, 1)
-    conv_blocks: tuple[int, ...] = (4, 4, 4)
-    temporal_blocks: tuple[int, ...] = (0, 0, 2, 4)
+    pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2)
+    pool_features: tuple[int, ...] = (1, 1, 1, 1, 1)
+    conv_blocks: tuple[int, ...] = (8, 4, 4, 2, 2)
+    temporal_blocks: tuple[int, ...] = (0, 2, 4, 4, 8, 8)
+
+    # FOR MNIST
+    # pool_temporal: tuple[int, ...] = (2, 2, 2, 2)
+    # pool_features: tuple[int, ...] = (1, 1, 1, 1)
+    # conv_blocks: tuple[int, ...] = (4, 4, 4, 2)
+    # temporal_blocks: tuple[int, ...] = (0, 2, 2, 4)
 
     use_norm: bool = True
     use_inner_gating: bool = True
     use_temporal_cnn: bool = True
     skip_residual: Literal["add"] = "add"
 
-    d_base: int = 64
+    d_base: int = 128
     d_cond: int = 64
-    rnn_hidden_size: int = 256
+    rnn_hidden_size: int = 128
     ff_expand: int = 2
     cnn_kernel_size: int = 3
 
@@ -331,8 +332,8 @@ class FlowModel(nn.Module):
     def __call__(self, x, rng):
         time_rng, noise_rng = jax.random.split(rng, 2)
         bs, seq_len, c = x.shape
-        x_0 = self.H.data_preprocess_fn(x)
-        x_1 = jax.random.normal(noise_rng, shape=x_0.shape)
+        x_1 = self.H.data_preprocess_fn(x)
+        x_0 = jax.random.normal(noise_rng, shape=x_1.shape)
 
         t = jax.random.uniform(
             time_rng,
