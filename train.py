@@ -3,7 +3,7 @@ import os
 import time
 from functools import partial
 from os import path
-from typing import Annotated, Any
+from typing import Any
 
 import flax
 import jax
@@ -26,6 +26,7 @@ from models import (
     S4Hyperparams,
     VSSMHyperparams,
 )
+from tyro_utils import get_hyperparams
 
 flax.config.update("flax_use_orbax_checkpointing", False)
 map = safe_map
@@ -260,12 +261,14 @@ def log_configuration(H: Hyperparams, S: TrainState):
 
 
 def main():
-    H = tyro.cli(
-        Annotated[VSSMHyperparams, tyro.conf.subcommand("vssm")]
-        | Annotated[S4Hyperparams, tyro.conf.subcommand("s4")]
-        | Annotated[ARHyperparams, tyro.conf.subcommand("ar")]
-        | Annotated[PatchARHyperparams, tyro.conf.subcommand("patch-ar")]
-        | Annotated[DiffusionHyperparams, tyro.conf.subcommand("diffusion")]
+    H = get_hyperparams(
+        {
+            "vssm": VSSMHyperparams,
+            "s4": S4Hyperparams,
+            "ar": ARHyperparams,
+            "patch-ar": PatchARHyperparams,
+            "diffusion": DiffusionHyperparams,
+        }
     )
     H, data = load_data(H)
     H.logprint("Loading train state")
