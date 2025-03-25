@@ -1,0 +1,28 @@
+program: train.py
+command:
+  - python
+  - ${program}
+  - ar
+  - --dataset=sc09
+  - --num-epochs=1000
+  - --batch-size=64
+  - --checkpoint-dir=gs://ssm-checkpoints/
+  - ${args}
+method: grid
+parameters:
+  learning-rate:
+    values:
+      - 1e-4
+      - 3e-4
+      - 1e-3
+      - 3e-3
+  learning-rate-scheduler:
+    values:
+      - "constant"
+      - "warmup_cosine_decay"
+  rnn.n-diag-blocks:
+    values:
+      - 1
+      - 2
+      - 4
+      - 8
