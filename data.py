@@ -1,13 +1,16 @@
 import dataclasses
 import os
+import shutil
 import wave
 import zipfile
 from functools import partial
+from multiprocessing import Pool
 from os import path
 from pathlib import Path
 from typing import List
 from urllib.request import urlretrieve
 
+import ffmpeg
 import jax.numpy as jnp
 import numpy as np
 from PIL import Image
@@ -23,6 +26,8 @@ def load_data(H: Hyperparams):
             H, data = load_mnist_binarized(H)
         case "sc09":
             H, data = load_sc09(H)
+        case "sc09-downsampled":
+            H, data = load_sc09_downsampled(H)
         case "beethoven":
             H, data = load_beethoven(H)
         case "youtube_mix":
@@ -111,24 +116,22 @@ def unzip(H, zip_file: Path, extract_dir: Path):
 
 def wav_to_np(path: Path) -> np.ndarray:
     rate, data = wavfile.read(path)
-    assert rate == 16000
     return data
 
 
-def np_to_wav(x: np.ndarray, path: Path):
+def np_to_wav(x: np.ndarray, path: Path, framerate):
     with wave.open(str(path), "wb") as wav_file:
         wav_file.setnchannels(1)
         wav_file.setsampwidth(2)
-        wav_file.setframerate(16000)
+        wav_file.setframerate(framerate)
         wav_file.writeframes(x.tobytes())
 
 
-def pad(x: List[np.ndarray], seq_len: int) -> np.ndarray:
-    n_samples = len(x)
-    padded_x = np.zeros((n_samples, seq_len), dtype=x[0].dtype)
-    for samp_idx, sample in enumerate(x):
-        padded_x[samp_idx, : len(sample)] = sample
-    return padded_x
+def pad(xs: List[np.ndarray], seq_len: int) -> np.ndarray:
+    xs_padded = np.zeros((len(xs), seq_len), dtype=xs[0].dtype)
+    for i, x in enumerate(xs):
+        xs_padded[i, : len(x)] = x
+    return xs_padded
 
 
 def mu_law_encode(audio):
@@ -188,6 +191,7 @@ def load_sc09(H):
         data_num_cats=num_cats,
         data_preprocess_fn=lambda x: (2 * x / 256) - 1,
         data_num_training_samples=data_num_training_samples,
+        data_framerate=16000,
     )
 
     maybe_download(
@@ -237,6 +241,93 @@ def load_sc09(H):
     return H, (train, test)
 
 
+def wav_to_mp3_to_wav(fname, outrate=8000):
+    base, extension = path.splitext(fname)
+    fname_mp3 = base + ".mp3"
+    ffmpeg.input(fname).output(fname_mp3, audio_bitrate="16k").run(
+        overwrite_output=True, quiet=True
+    )
+    ffmpeg.input(fname_mp3).output(str(fname), ar=outrate).run(
+        overwrite_output=True, quiet=True
+    )
+
+
+def load_sc09_downsampled(H):
+    data_num_training_samples = 31158
+    seq_len = 8_000
+    num_cats = 256
+    data_dir = Path(H.data_dir)
+    originals_dir = data_dir / "sc09"
+    base_dir = data_dir / "sc09-downsampled"
+    zip_file = data_dir / "sc09.zip"
+    cache_file = base_dir / "cache.npz"
+
+    H = dataclasses.replace(
+        H,
+        data_seq_length=seq_len,
+        data_num_channels=1,
+        data_num_cats=num_cats,
+        data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+        data_num_training_samples=data_num_training_samples,
+        data_framerate=8000,
+    )
+
+    maybe_download(
+        H,
+        "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip",
+        zip_file,
+    )
+    if not originals_dir.exists():
+        unzip(H, zip_file, data_dir)
+    if not base_dir.exists():
+        shutil.copytree(originals_dir, base_dir)
+        if path.exists(cache_file):
+            os.remove(cache_file)
+
+    if not cache_file.exists():
+        testing_list = base_dir / "testing_list.txt"
+        validation_list = base_dir / "validation_list.txt"
+        test_tracks = set(
+            testing_list.read_text().splitlines()
+            + validation_list.read_text().splitlines()
+        )
+
+        train = []
+        test = []
+        H.logprint("Reading SC09 wav files...")
+        tracks = list(base_dir.glob("**/*.wav"))
+        H.logprint("Converting to mp3 and back to wav...")
+        with Pool(16) as P:
+            P.map(wav_to_mp3_to_wav, tracks)
+        for track in tracks:
+            if f"{track.parent.name}/{track.name}" in test_tracks:
+                test.append(wav_to_np(track))
+            else:
+                train.append(wav_to_np(track))
+
+        H.logprint("Converting to NumPy array...")
+        train = mu_law_encode(pad(train, seq_len)).astype(np.uint8)
+        test = mu_law_encode(pad(test, seq_len)).astype(np.uint8)
+
+        np.savez(cache_file, train=train, test=test)
+
+    cache = np.load(cache_file)
+    # The cache is stored as uint8, but I don't want to deal with overflows
+    train = cache["train"].astype(np.int16)
+    test = cache["test"].astype(np.int16)
+
+    # Add a dummy channel dim
+    train, test = train[..., np.newaxis], test[..., np.newaxis]
+
+    assert train.dtype == test.dtype == np.int16
+    assert train.shape == (data_num_training_samples, 8000, 1)
+    assert test.shape == (7750, 8000, 1)
+
+    np.random.RandomState(H.seed).shuffle(train)
+
+    return H, (train, test)
+
+
 def load_beethoven(H):
     data_num_training_samples = 3808
     seq_len = 128_000
@@ -253,6 +344,7 @@ def load_beethoven(H):
         data_num_cats=num_cats,
         data_preprocess_fn=lambda x: (2 * x / 256) - 1,
         data_num_training_samples=data_num_training_samples,
+        data_framerate=16000,
     )
 
     maybe_download(
@@ -310,6 +402,7 @@ def load_youtube_mix(H):
         data_num_cats=num_cats,
         data_preprocess_fn=lambda x: (2 * x / 256) - 1,
         data_num_training_samples=data_num_training_samples,
+        data_framerate=16000,
     )
 
     maybe_download(
@@ -398,7 +491,7 @@ def save_audio(H: Hyperparams, step, samples):
     sample_filenames = []
     for sample_id, sample in enumerate(samples):
         sample_path = sample_dir / f"step-{step}-audio-{sample_id}.wav"
-        np_to_wav(sample, sample_path)
+        np_to_wav(sample, sample_path, H.data_framerate)
         sample_filenames.append(str(sample_path))
 
     if H.enable_wandb:

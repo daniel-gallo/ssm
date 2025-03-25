@@ -8,3 +8,4 @@ pytest
 einops
 pillow
 wandb
+ffmpeg-python

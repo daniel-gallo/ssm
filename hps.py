@@ -51,6 +51,7 @@ class Hyperparams:
     data_num_cats: Optional[int] = None
     data_preprocess_fn: Optional[Callable] = None
     data_num_training_samples: Optional[int] = None
+    data_framerate: Optional[int] = None
 
     @property
     def data_shape(self):
