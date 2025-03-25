@@ -10,7 +10,10 @@ else
   workerid=$(curl http://metadata.google.internal/computeMetadata/v1/instance/attributes/agent-worker-number -H "Metadata-Flavor: Google")
   hostname=$instanceid-$workerid
 fi
-sudo hostnamectl set-hostname $hostname
+hostnamectl set-hostname $hostname
+
+# INSTALL FFMPEG
+apt install ffmpeg
 
 # SETUP GITHUB ACCESS
 mkdir ~/.ssh
