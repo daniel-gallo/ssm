@@ -256,6 +256,7 @@ def log_configuration(H: Hyperparams, S: TrainState):
             config=config,
             name=H.id,
         )
+        wandb.mark_preempting()
 
 
 def main():
