@@ -1,6 +1,5 @@
 import dataclasses
 import os
-import shutil
 import wave
 import zipfile
 from functools import partial
@@ -27,6 +26,8 @@ def load_data(H: Hyperparams):
             H, data = load_mnist_binarized(H)
         case "sc09":
             H, data = load_sc09(H)
+        case "sc09-mp3":
+            H, data = load_sc09_mp3(H)
         case "sc09-mp3-downsampled":
             H, data = load_sc09_mp3_downsampled(H)
         case "beethoven":
@@ -257,6 +258,81 @@ def wav_to_mp3_to_wav(fname, outrate=8000):
     )
 
 
+def load_sc09_mp3(H):
+    data_num_training_samples = 31158
+    seq_len = 16_000
+    num_cats = 256
+    url = "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip"
+    base_dir = Path(H.data_dir) / "sc09-mp3"
+    zip_file = base_dir / "sc09.zip"
+    unzipped_dir = base_dir / "sc09"
+    cache_file = base_dir / "cache.npz"
+    cache_url = "gs://ssm-datasets/sc09-mp3.npz"
+
+    os.makedirs(base_dir, exist_ok=True)
+
+    H = dataclasses.replace(
+        H,
+        data_seq_length=seq_len,
+        data_num_channels=1,
+        data_num_cats=num_cats,
+        data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+        data_num_training_samples=data_num_training_samples,
+        data_framerate=16000,
+    )
+
+    if gfile.exists(cache_url) and not cache_file.exists():
+        H.logprint("Loading sc09-mp3-downsampled from GCS")
+        gfile.copy(cache_url, cache_file)
+
+    if not cache_file.exists():
+        if not unzipped_dir.exists():
+            maybe_download(H, url, zip_file)
+            unzip(H, zip_file, base_dir)
+
+        testing_list = unzipped_dir / "testing_list.txt"
+        validation_list = unzipped_dir / "validation_list.txt"
+        test_tracks = set(
+            testing_list.read_text().splitlines()
+            + validation_list.read_text().splitlines()
+        )
+
+        train = []
+        test = []
+        H.logprint("Reading SC09 wav files...")
+        tracks = list(base_dir.glob("**/*.wav"))
+        H.logprint("Converting to mp3 and back to wav...")
+        with Pool(16) as P:
+            P.map(partial(wav_to_mp3_to_wav, outrate=16000), tracks)
+        for track in tracks:
+            if f"{track.parent.name}/{track.name}" in test_tracks:
+                test.append(wav_to_np(track))
+            else:
+                train.append(wav_to_np(track))
+
+        H.logprint("Converting to NumPy array...")
+        train = mu_law_encode(pad(train, seq_len)).astype(np.uint8)
+        test = mu_law_encode(pad(test, seq_len)).astype(np.uint8)
+
+        np.savez(cache_file, train=train, test=test)
+
+    cache = np.load(cache_file)
+    # The cache is stored as uint8, but I don't want to deal with overflows
+    train = cache["train"].astype(np.int16)
+    test = cache["test"].astype(np.int16)
+
+    # Add a dummy channel dim
+    train, test = train[..., np.newaxis], test[..., np.newaxis]
+
+    assert train.dtype == test.dtype == np.int16
+    assert train.shape == (data_num_training_samples, 16000, 1)
+    assert test.shape == (7750, 16000, 1)
+
+    np.random.RandomState(H.seed).shuffle(train)
+
+    return H, (train, test)
+
+
 def load_sc09_mp3_downsampled(H):
     data_num_training_samples = 31158
     seq_len = 8_000
@@ -458,7 +534,7 @@ def save_samples(H: Hyperparams, step, samples):
     match H.dataset:
         case "binarized-mnist":
             save_mnist_binarized(H, step, samples)
-        case "sc09" | "sc09-mp3-downsampled" | "beethoven" | "youtube_mix":
+        case "sc09" | "sc09-mp3" | "sc09-mp3-downsampled" | "beethoven" | "youtube_mix":
             save_audio(H, step, samples)
         case _:
             H.logprint(f"Dataset {H.dataset} does not support saving sampling")
