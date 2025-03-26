@@ -19,12 +19,15 @@ As linter / formatter, we can use [Ruff](https://docs.astral.sh/ruff/).
        Edit the sheet to show that you are using the node.
      - Attach an existing node. Firstly update the sweep id on the node, then
        run the startup script:
-        1. This command will update the sweep id on the existing node:
+        1. These commands will update the sweep id and refresh the startup script
+           on the existing node:
            ```bash
            gcloud compute tpus tpu-vm update NAME_OF_TPU --zone=ZONE \
              --update-metadata=wandb-sweep-id=SWEEP_ID
+           gcloud compute tpus tpu-vm update NAME_OF_TPU --zone=ZONE \
+             --metadata-from-file=wandb-sweep-id=SWEEP_ID
            ```
-        2. Make sure there are no processes using the TPU on the node, then run
+        3. Make sure there are no processes using the TPU on the node, then run
            ```bash
            gcloud compute tpus tpu-vm ssh NAME_OF_TPU --zone ZONE \
              --worker all \
