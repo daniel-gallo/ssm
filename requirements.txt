@@ -9,3 +9,4 @@ einops
 pillow
 wandb
 ffmpeg-python
+tensorflow

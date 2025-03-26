@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 from PIL import Image
 from scipy.io import wavfile
+from tensorflow.io import gfile
 
 from hps import Hyperparams
 
@@ -26,8 +27,8 @@ def load_data(H: Hyperparams):
             H, data = load_mnist_binarized(H)
         case "sc09":
             H, data = load_sc09(H)
-        case "sc09-downsampled":
-            H, data = load_sc09_downsampled(H)
+        case "sc09-mp3-downsampled":
+            H, data = load_sc09_mp3_downsampled(H)
         case "beethoven":
             H, data = load_beethoven(H)
         case "youtube_mix":
@@ -179,10 +180,14 @@ def load_sc09(H):
     data_num_training_samples = 31158
     seq_len = 16_000
     num_cats = 256
-    data_dir = Path(H.data_dir)
-    base_dir = data_dir / "sc09"
-    zip_file = data_dir / "sc09.zip"
+    url = "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip"
+    base_dir = Path(H.data_dir) / "sc09"
+    zip_file = base_dir / "sc09.zip"
+    unzipped_dir = base_dir / "sc09"
     cache_file = base_dir / "cache.npz"
+    cache_url = "gs://ssm-datasets/sc09.npz"
+
+    os.makedirs(base_dir, exist_ok=True)
 
     H = dataclasses.replace(
         H,
@@ -194,17 +199,17 @@ def load_sc09(H):
         data_framerate=16000,
     )
 
-    maybe_download(
-        H,
-        "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip",
-        zip_file,
-    )
-    if not base_dir.exists():
-        unzip(H, zip_file, data_dir)
+    if gfile.exists(cache_url) and not cache_file.exists():
+        H.logprint("Loading sc09 from GCS")
+        gfile.copy(cache_url, cache_file)
 
     if not cache_file.exists():
-        testing_list = base_dir / "testing_list.txt"
-        validation_list = base_dir / "validation_list.txt"
+        if not unzipped_dir.exists():
+            maybe_download(H, url, zip_file)
+            unzip(H, zip_file, base_dir)
+
+        testing_list = unzipped_dir / "testing_list.txt"
+        validation_list = unzipped_dir / "validation_list.txt"
         test_tracks = set(
             testing_list.read_text().splitlines()
             + validation_list.read_text().splitlines()
@@ -213,7 +218,7 @@ def load_sc09(H):
         train = []
         test = []
         H.logprint("Reading SC09 wav files...")
-        for track in base_dir.glob("**/*.wav"):
+        for track in unzipped_dir.glob("**/*.wav"):
             if f"{track.parent.name}/{track.name}" in test_tracks:
                 test.append(wav_to_np(track))
             else:
@@ -252,15 +257,18 @@ def wav_to_mp3_to_wav(fname, outrate=8000):
     )
 
 
-def load_sc09_downsampled(H):
+def load_sc09_mp3_downsampled(H):
     data_num_training_samples = 31158
     seq_len = 8_000
     num_cats = 256
-    data_dir = Path(H.data_dir)
-    originals_dir = data_dir / "sc09"
-    base_dir = data_dir / "sc09-downsampled"
-    zip_file = data_dir / "sc09.zip"
+    url = "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip"
+    base_dir = Path(H.data_dir) / "sc09-mp3-downsampled"
+    zip_file = base_dir / "sc09.zip"
+    unzipped_dir = base_dir / "sc09"
     cache_file = base_dir / "cache.npz"
+    cache_url = "gs://ssm-datasets/sc09-mp3-downsampled.npz"
+
+    os.makedirs(base_dir, exist_ok=True)
 
     H = dataclasses.replace(
         H,
@@ -272,21 +280,17 @@ def load_sc09_downsampled(H):
         data_framerate=8000,
     )
 
-    maybe_download(
-        H,
-        "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip",
-        zip_file,
-    )
-    if not originals_dir.exists():
-        unzip(H, zip_file, data_dir)
-    if not base_dir.exists():
-        shutil.copytree(originals_dir, base_dir)
-        if path.exists(cache_file):
-            os.remove(cache_file)
+    if gfile.exists(cache_url) and not cache_file.exists():
+        H.logprint("Loading sc09-mp3-downsampled from GCS")
+        gfile.copy(cache_url, cache_file)
 
     if not cache_file.exists():
-        testing_list = base_dir / "testing_list.txt"
-        validation_list = base_dir / "validation_list.txt"
+        if not unzipped_dir.exists():
+            maybe_download(H, url, zip_file)
+            unzip(H, zip_file, base_dir)
+
+        testing_list = unzipped_dir / "testing_list.txt"
+        validation_list = unzipped_dir / "validation_list.txt"
         test_tracks = set(
             testing_list.read_text().splitlines()
             + validation_list.read_text().splitlines()
@@ -332,10 +336,12 @@ def load_beethoven(H):
     data_num_training_samples = 3808
     seq_len = 128_000
     num_cats = 256
-    data_dir = Path(H.data_dir)
-    base_dir = data_dir / "beethoven"
-    zip_file = data_dir / "beethoven.zip"
+    base_dir = Path(H.data_dir) / "beethoven"
+    zip_file = base_dir / "beethoven.zip"
+    unzipped_dir = base_dir / "beethoven"
     cache_file = base_dir / "cache.npz"
+
+    os.makedirs(base_dir, exist_ok=True)
 
     H = dataclasses.replace(
         H,
@@ -352,19 +358,19 @@ def load_beethoven(H):
         "https://huggingface.co/datasets/krandiash/beethoven/resolve/main/beethoven.zip?download=true",
         zip_file,
     )
-    if not base_dir.exists():
-        unzip(H, zip_file, data_dir)
+    if not unzipped_dir.exists():
+        unzip(H, zip_file, base_dir)
 
     if not cache_file.exists():
         H.logprint("Reading Beethoven wav files...")
         train = []
         for i in range(3808):
-            train.append(wav_to_np(base_dir / f"{i}.wav"))
+            train.append(wav_to_np(unzipped_dir / f"{i}.wav"))
 
         test = []
         # validation is [3808, 4067]
         for i in range(3808, 4328):
-            test.append(wav_to_np(base_dir / f"{i}.wav"))
+            test.append(wav_to_np(unzipped_dir / f"{i}.wav"))
 
         train = mu_law_encode(pad(train, seq_len)).astype(np.uint8)
         test = mu_law_encode(pad(test, seq_len)).astype(np.uint8)
@@ -390,10 +396,12 @@ def load_youtube_mix(H):
     data_num_training_samples = 212
     seq_len = 960_512
     num_cats = 256
-    data_dir = Path(H.data_dir)
-    base_dir = data_dir / "youtube_mix"
-    zip_file = data_dir / "youtube_mix.zip"
+    base_dir = Path(H.data_dir) / "youtube_mix"
+    zip_file = base_dir / "youtube_mix.zip"
+    unzipped_dir = base_dir / "youtube_mix"
     cache_file = base_dir / "cache.npz"
+
+    os.makedirs(base_dir, exist_ok=True)
 
     H = dataclasses.replace(
         H,
@@ -411,20 +419,20 @@ def load_youtube_mix(H):
         zip_file,
     )
     if not base_dir.exists():
-        unzip(H, zip_file, data_dir)
+        unzip(H, zip_file, base_dir)
 
     if not cache_file.exists():
         H.logprint("Reading Youtube Mix wav files...")
         train = []
         for i in range(212):
             idx = str(i).zfill(3)
-            train.append(wav_to_np(base_dir / f"out{idx}.wav"))
+            train.append(wav_to_np(unzipped_dir / f"out{idx}.wav"))
 
         test = []
         # validation is [212, 225]
         for i in range(212, 241):
             idx = str(i).zfill(3)
-            test.append(wav_to_np(base_dir / f"out{idx}.wav"))
+            test.append(wav_to_np(unzipped_dir / f"out{idx}.wav"))
 
         train = mu_law_encode(pad(train, seq_len)).astype(np.uint8)
         test = mu_law_encode(pad(test, seq_len)).astype(np.uint8)
@@ -450,7 +458,7 @@ def save_samples(H: Hyperparams, step, samples):
     match H.dataset:
         case "binarized-mnist":
             save_mnist_binarized(H, step, samples)
-        case "sc09" | "sc09-downsampled" | "beethoven" | "youtube_mix":
+        case "sc09" | "sc09-mp3-downsampled" | "beethoven" | "youtube_mix":
             save_audio(H, step, samples)
         case _:
             H.logprint(f"Dataset {H.dataset} does not support saving sampling")

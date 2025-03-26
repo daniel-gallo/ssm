@@ -267,6 +267,7 @@ def main():
         | Annotated[PatchARHyperparams, tyro.conf.subcommand("patch-ar")]
         | Annotated[DiffusionHyperparams, tyro.conf.subcommand("diffusion")]
     )
+    H.logprint("Loading data")
     H, data = load_data(H)
     H.logprint("Loading train state")
     S = load_train_state(H)
