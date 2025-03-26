@@ -534,7 +534,13 @@ def save_samples(H: Hyperparams, step, samples):
     match H.dataset:
         case "binarized-mnist":
             save_mnist_binarized(H, step, samples)
-        case "sc09" | "sc09-mp3" | "sc09-mp3-downsampled" | "beethoven" | "youtube_mix":
+        case (
+            "sc09"
+            | "sc09-mp3"
+            | "sc09-mp3-downsampled"
+            | "beethoven"
+            | "youtube_mix"
+        ):
             save_audio(H, step, samples)
         case _:
             H.logprint(f"Dataset {H.dataset} does not support saving sampling")
