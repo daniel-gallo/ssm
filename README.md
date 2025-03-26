@@ -25,7 +25,7 @@ As linter / formatter, we can use [Ruff](https://docs.astral.sh/ruff/).
            gcloud compute tpus tpu-vm update NAME_OF_TPU --zone=ZONE \
              --update-metadata=wandb-sweep-id=SWEEP_ID
            gcloud compute tpus tpu-vm update NAME_OF_TPU --zone=ZONE \
-             --metadata-from-file=wandb-sweep-id=SWEEP_ID
+             --metadata-from-file=startup-script=tpu-startup-script.sh
            ```
         3. Make sure there are no processes using the TPU on the node, then run
            ```bash
