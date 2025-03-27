@@ -2,7 +2,6 @@ import dataclasses
 import os
 import time
 from functools import partial
-from os import path
 from typing import Any
 
 import flax
@@ -10,15 +9,16 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-import tyro
 from flax.training import checkpoints
 from jax import random, tree, tree_util
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.util import safe_map
+from jsonargparse import auto_cli
 
 from data import load_data, save_samples
 from hps import Hyperparams
+from log_util import log, logprint, logtrain
 from models import (
     ARHyperparams,
     DiffusionHyperparams,
@@ -26,7 +26,6 @@ from models import (
     S4Hyperparams,
     VSSMHyperparams,
 )
-from tyro_utils import get_hyperparams
 
 flax.config.update("flax_use_orbax_checkpointing", False)
 map = safe_map
@@ -54,7 +53,7 @@ class TrainState:
 
 
 def save_checkpoint(H: Hyperparams, S: TrainState):
-    H.logprint("Saving checkpoint", step=S.step)
+    logprint(H, "Saving checkpoint", step=S.step)
     checkpoints.save_checkpoint(
         H.checkpoint_dir,
         dataclasses.asdict(S),
@@ -74,9 +73,9 @@ def restore_checkpoint(H: Hyperparams, S: TrainState):
             prefix=H.checkpoint_prefix,
         )
         S = TrainState(**S_dict)
-        H.logprint(f"Checkpoint restored from {latest_checkpoint_path}")
+        logprint(H, f"Checkpoint restored from {latest_checkpoint_path}")
     else:
-        H.logprint("No checkpoint found")
+        logprint(H, "No checkpoint found")
     return S
 
 
@@ -168,11 +167,6 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
 
 
 def train_epoch(H: Hyperparams, S: TrainState, data):
-    early_logsteps = set(2**e for e in range(12))
-
-    def should_log(step):
-        return int(step) in early_logsteps or not step % H.steps_per_print
-
     if H.shuffle_before_epoch:
         rng, rng_shuffle = random.split(S.rng)
         S = dataclasses.replace(S, rng=rng)
@@ -182,7 +176,7 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
         S, metrics = train_iter(H, S, batch)
         metrics = prepend_to_keys(metrics, "train/")
         metrics["lr"] = H.scheduler(S.step)
-        H.logtrain(S.step, metrics)
+        logtrain(H, S.step, metrics)
     return S
 
 
@@ -233,49 +227,52 @@ def train(H: Hyperparams, S: TrainState, data):
             save_checkpoint(H, S)
             t_last_checkpoint = time.time()
         if not (e + 1) % H.epochs_per_eval:
-            H.log(S.step, eval(H, S, data_test))
+            log(S.step, eval(H, H, S, data_test))
 
         if H.num_samples_per_eval and (not (e + 1) % H.epochs_per_gen):
             generate_samples(H, S)
 
 
-def log_configuration(H: Hyperparams, S: TrainState):
+def log_configuration(H: Hyperparams):
     os.makedirs(H.log_dir, exist_ok=True)
-    with open(path.join(H.log_dir, H.id + ".yaml"), "w") as f:
-        f.write(tyro.to_yaml(H))
 
     if H.enable_wandb:
         import wandb
 
-        config = dataclasses.asdict(H)
-        num_parameters = sum(leaf.size for leaf in tree.leaves(S.weights))
-        H.logprint(f"Number of parameters: {num_parameters}")
-        config["num_parameters"] = num_parameters
-        config["model"] = H.model.__class__.__name__
-
         wandb.init(
-            config=config,
+            config=dataclasses.asdict(H),
             name=H.id,
         )
         wandb.mark_preempting()
 
 
 def main():
-    H = get_hyperparams(
+    H = auto_cli(
         {
             "vssm": VSSMHyperparams,
             "s4": S4Hyperparams,
             "ar": ARHyperparams,
             "patch-ar": PatchARHyperparams,
             "diffusion": DiffusionHyperparams,
-        }
+        },
+        as_positional=False,
     )
-    H.logprint("Loading data")
+    log_configuration(H)
+    logprint(H, "Loading data")
     H, data = load_data(H)
-    H.logprint("Loading train state")
+    logprint(H, "Loading train state")
     S = load_train_state(H)
-    log_configuration(H, S)
-    H.logprint("Training", id=H.id)
+    if S.step == 0:
+        log(
+            H,
+            0,
+            dict(
+                num_parameters=sum(w.size for w in tree.leaves(S.weights)),
+                model=H.model.__class__.__name__,
+            ),
+        )
+
+    logprint(H, "Training", id=H.id)
     train(H, S, data)
     if H.enable_wandb:
         import wandb
