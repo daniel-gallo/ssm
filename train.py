@@ -226,7 +226,7 @@ def train(H: Hyperparams, S: TrainState, data):
             save_checkpoint(H, S)
             t_last_checkpoint = time.time()
         if not (e + 1) % H.epochs_per_eval:
-            log(S.step, eval(H, S, data_test))
+            log(H, S.step, eval(H, S, data_test))
 
         if H.num_samples_per_eval and (not (e + 1) % H.epochs_per_gen):
             generate_samples(H, S)
