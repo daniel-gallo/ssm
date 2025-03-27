@@ -6,13 +6,15 @@ from os import path
 import jax
 from jax import tree
 
+from hps import Hyperparams
+
 
 def cast_jax_scalars(d):
     # We assume that all Array metrics are, in fact, scalars
     return tree.map(lambda v: v.item() if isinstance(v, jax.Array) else v, d)
 
 
-def logprint(log_dir, name, *args, **kwargs):
+def _logprint(log_dir, name, *args, **kwargs):
     args, kwargs = cast_jax_scalars((args, kwargs))
 
     ctime = time.ctime()
@@ -36,3 +38,26 @@ def logprint(log_dir, name, *args, **kwargs):
 
     with open(fname_jsonl, "a+") as f:
         print(text_jsonl, file=f, flush=True)
+
+
+def logprint(H: Hyperparams, *args, **kwargs):
+    _logprint(H.log_dir, H.id, *args, **kwargs)
+
+
+def logtrain(H: Hyperparams, step, metrics):
+    early_logsteps = set(2**e for e in range(12))
+
+    if int(step) in early_logsteps or not step % H.steps_per_print:
+        logprint(H, step=step, **metrics)
+    if H.enable_wandb:
+        import wandb
+
+        wandb.log(metrics, step)
+
+
+def log(H: Hyperparams, step, metrics):
+    logprint(H, step=step, **metrics)
+    if H.enable_wandb:
+        import wandb
+
+        wandb.log(metrics, step)

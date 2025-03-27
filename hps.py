@@ -7,10 +7,6 @@ import flax.linen as nn
 import optax
 from optax.schedules import Schedule
 
-from log_util import logprint
-
-_early_logsteps = set(2**e for e in range(12))
-
 
 @dataclasses.dataclass(frozen=True)
 class Hyperparams:
@@ -83,24 +79,6 @@ class Hyperparams:
         return optax.adamw(
             self.scheduler, weight_decay=self.weight_decay, b2=self.b2
         )
-
-    def logprint(self, *args, **kwargs):
-        logprint(self.log_dir, self.id, *args, **kwargs)
-
-    def logtrain(self, step, metrics):
-        if int(step) in _early_logsteps or not step % self.steps_per_print:
-            self.logprint(step=step, **metrics)
-        if self.enable_wandb:
-            import wandb
-
-            wandb.log(metrics, step)
-
-    def log(self, step, metrics):
-        self.logprint(step=step, **metrics)
-        if self.enable_wandb:
-            import wandb
-
-            wandb.log(metrics, step)
 
     @property
     def id(self):

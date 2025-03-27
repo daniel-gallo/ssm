@@ -1,7 +1,7 @@
 jax
 numpy
 scipy
-tyro
+jsonargparse
 flax
 optax
 pytest

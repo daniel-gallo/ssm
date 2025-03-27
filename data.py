@@ -17,6 +17,7 @@ from scipy.io import wavfile
 from tensorflow.io import gfile
 
 from hps import Hyperparams
+from log_util import logprint
 
 
 def load_data(H: Hyperparams):
@@ -106,12 +107,12 @@ def maybe_download(H, url: str, path: Path):
     if path.exists():
         return
 
-    H.logprint(f"Downloading {url}...")
+    logprint(H, f"Downloading {url}...")
     urlretrieve(url, path)
 
 
 def unzip(H, zip_file: Path, extract_dir: Path):
-    H.logprint(f"Extracting {zip_file}...")
+    logprint(H, f"Extracting {zip_file}...")
     with zipfile.ZipFile(zip_file, "r") as zip_ref:
         zip_ref.extractall(extract_dir)
 
@@ -201,7 +202,7 @@ def load_sc09(H):
     )
 
     if gfile.exists(cache_url) and not cache_file.exists():
-        H.logprint("Loading sc09 from GCS")
+        logprint(H, "Loading sc09 from GCS")
         gfile.copy(cache_url, cache_file)
 
     if not cache_file.exists():
@@ -218,7 +219,7 @@ def load_sc09(H):
 
         train = []
         test = []
-        H.logprint("Reading SC09 wav files...")
+        logprint(H, "Reading SC09 wav files...")
         for track in unzipped_dir.glob("**/*.wav"):
             if f"{track.parent.name}/{track.name}" in test_tracks:
                 test.append(wav_to_np(track))
@@ -282,7 +283,7 @@ def load_sc09_mp3(H):
     )
 
     if gfile.exists(cache_url) and not cache_file.exists():
-        H.logprint("Loading sc09-mp3-downsampled from GCS")
+        logprint(H, "Loading sc09-mp3-downsampled from GCS")
         gfile.copy(cache_url, cache_file)
 
     if not cache_file.exists():
@@ -299,9 +300,9 @@ def load_sc09_mp3(H):
 
         train = []
         test = []
-        H.logprint("Reading SC09 wav files...")
+        logprint(H, "Reading SC09 wav files...")
         tracks = list(base_dir.glob("**/*.wav"))
-        H.logprint("Converting to mp3 and back to wav...")
+        logprint(H, "Converting to mp3 and back to wav...")
         with Pool(16) as P:
             P.map(partial(wav_to_mp3_to_wav, outrate=16000), tracks)
         for track in tracks:
@@ -310,7 +311,7 @@ def load_sc09_mp3(H):
             else:
                 train.append(wav_to_np(track))
 
-        H.logprint("Converting to NumPy array...")
+        logprint(H, "Converting to NumPy array...")
         train = mu_law_encode(pad(train, seq_len)).astype(np.uint8)
         test = mu_law_encode(pad(test, seq_len)).astype(np.uint8)
 
@@ -357,7 +358,7 @@ def load_sc09_mp3_downsampled(H):
     )
 
     if gfile.exists(cache_url) and not cache_file.exists():
-        H.logprint("Loading sc09-mp3-downsampled from GCS")
+        logprint(H, "Loading sc09-mp3-downsampled from GCS")
         gfile.copy(cache_url, cache_file)
 
     if not cache_file.exists():
@@ -374,9 +375,9 @@ def load_sc09_mp3_downsampled(H):
 
         train = []
         test = []
-        H.logprint("Reading SC09 wav files...")
+        logprint(H, "Reading SC09 wav files...")
         tracks = list(base_dir.glob("**/*.wav"))
-        H.logprint("Converting to mp3 and back to wav...")
+        logprint(H, "Converting to mp3 and back to wav...")
         with Pool(16) as P:
             P.map(wav_to_mp3_to_wav, tracks)
         for track in tracks:
@@ -385,7 +386,7 @@ def load_sc09_mp3_downsampled(H):
             else:
                 train.append(wav_to_np(track))
 
-        H.logprint("Converting to NumPy array...")
+        logprint(H, "Converting to NumPy array...")
         train = mu_law_encode(pad(train, seq_len)).astype(np.uint8)
         test = mu_law_encode(pad(test, seq_len)).astype(np.uint8)
 
@@ -438,7 +439,7 @@ def load_beethoven(H):
         unzip(H, zip_file, base_dir)
 
     if not cache_file.exists():
-        H.logprint("Reading Beethoven wav files...")
+        logprint(H, "Reading Beethoven wav files...")
         train = []
         for i in range(3808):
             train.append(wav_to_np(unzipped_dir / f"{i}.wav"))
@@ -498,7 +499,7 @@ def load_youtube_mix(H):
         unzip(H, zip_file, base_dir)
 
     if not cache_file.exists():
-        H.logprint("Reading Youtube Mix wav files...")
+        logprint(H, "Reading Youtube Mix wav files...")
         train = []
         for i in range(212):
             idx = str(i).zfill(3)
@@ -543,7 +544,7 @@ def save_samples(H: Hyperparams, step, samples):
         ):
             save_audio(H, step, samples)
         case _:
-            H.logprint(f"Dataset {H.dataset} does not support saving sampling")
+            logprint(H, f"Dataset {H.dataset} does not support saving sampling")
 
 
 def save_mnist_binarized(H: Hyperparams, step, samples):
