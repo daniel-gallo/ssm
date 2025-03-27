@@ -1,5 +1,4 @@
 import dataclasses
-import os
 import time
 from functools import partial
 from typing import Any
@@ -234,8 +233,6 @@ def train(H: Hyperparams, S: TrainState, data):
 
 
 def log_configuration(H: Hyperparams):
-    os.makedirs(H.log_dir, exist_ok=True)
-
     if H.enable_wandb:
         import wandb
 
