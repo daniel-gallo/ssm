@@ -4,24 +4,24 @@ command:
   - ${program}
   - ar
   - --dataset=sc09
-  - --num-epochs=1000
-  - --batch-size=64
-  - --checkpoint-dir=gs://ssm-checkpoints/
-  - --checkpoint-every=60
+  - --num_epochs=1000
+  - --batch_size=64
+  - --checkpoint_dir=gs://ssm-checkpoints/
+  - --checkpoint_every=60
   - ${args}
 method: grid
 parameters:
-  learning-rate:
+  learning_rate:
     values:
       - 1e-4
       - 3e-4
       - 1e-3
       - 3e-3
-  learning-rate-scheduler:
+  learning_rate_scheduler:
     values:
       - "constant"
       - "warmup_cosine_decay"
-  rnn.n-diag-blocks:
+  rnn.n_diag_blocks:
     values:
       - 1
       - 2
