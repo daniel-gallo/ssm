@@ -2,13 +2,14 @@ program: train.py
 command:
   - python
   - ${program}
-  - ar
-  - --dataset=sc09
-  - --num_epochs=1000
+  - patch-ar
+  - --config
+  - ${args_json_file}
+  - --dataset=sc09-mp3-downsampled
+  - --num_epochs=500
   - --batch_size=64
+  - --mins_per_checkpoint=60
   - --checkpoint_dir=gs://ssm-checkpoints/
-  - --checkpoint_every=60
-  - ${args}
 method: grid
 parameters:
   learning_rate:
@@ -17,6 +18,12 @@ parameters:
       - 3e-4
       - 1e-3
       - 3e-3
+  pool_temporal:
+    values:
+      - [2,2,2,2,2,2]
+      - [8,1,1,8,1,1]
+      - [16,1,1,4,1,1]
+      - [4,1,1,16,1,1]
   learning_rate_scheduler:
     values:
       - "constant"
