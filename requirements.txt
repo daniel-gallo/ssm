@@ -10,3 +10,4 @@ pillow
 wandb
 ffmpeg-python
 tensorflow
+soundfile
