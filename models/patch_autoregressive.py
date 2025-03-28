@@ -67,12 +67,11 @@ class PatchARHyperparams(Hyperparams):
 
 class DownPool(nn.Module):
     H: PatchARHyperparams
-    input_dim: int
     pool_temporal: int
-    pool_features: int
+    out_features: int
 
     def setup(self):
-        self.linear = nn.Dense(self.input_dim * self.pool_features)
+        self.linear = nn.Dense(self.out_features)
 
     def __call__(self, x):
         batch_size, seq_len, dim = x.shape
@@ -82,14 +81,12 @@ class DownPool(nn.Module):
 
 class UpPool(nn.Module):
     H: PatchARHyperparams
-    input_dim: int
     pool_temporal: int
-    pool_features: int
+    out_features: int
 
     def setup(self):
-        assert (self.input_dim * self.pool_temporal) % self.pool_features == 0
         self.linear = nn.Dense(
-            (self.input_dim * self.pool_temporal) // self.pool_features
+            self.out_features * self.pool_temporal
         )
 
     def __call__(self, x):
@@ -188,6 +185,7 @@ class SkipBlock(nn.Module):
 
     @nn.compact
     def __call__(self, x):
+        in_features = x.shape[-1]
         def _conv_block(expand=None, last_scale=1.0):
             return ResBlock(
                 self.H,
@@ -221,16 +219,14 @@ class SkipBlock(nn.Module):
 
         z = DownPool(
             self.H,
-            z.shape[-1],
             self.pool_temporal,
-            self.pool_feature,
+            self.H.base_dim * self.pool_feature,
         )(z)
         z = self.inner_layer(z)
         z = UpPool(
             self.H,
-            z.shape[-1],
             self.pool_temporal,
-            self.pool_feature,
+            in_features,
         )(z)
 
         for _ in range(self.temporal_blocks):
