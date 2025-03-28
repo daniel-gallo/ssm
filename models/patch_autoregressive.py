@@ -85,9 +85,7 @@ class UpPool(nn.Module):
     out_features: int
 
     def setup(self):
-        self.linear = nn.Dense(
-            self.out_features * self.pool_temporal
-        )
+        self.linear = nn.Dense(self.out_features * self.pool_temporal)
 
     def __call__(self, x):
         batch_size, seq_len, dim = x.shape
@@ -186,6 +184,7 @@ class SkipBlock(nn.Module):
     @nn.compact
     def __call__(self, x):
         in_features = x.shape[-1]
+
         def _conv_block(expand=None, last_scale=1.0):
             return ResBlock(
                 self.H,
