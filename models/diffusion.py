@@ -231,7 +231,7 @@ class DiffusionModel(nn.Module):
         self.noise_scheduler = NoiseScheduler(self.H)
         self.backbone = Backbone(self.H)
 
-    def __call__(self, x, rng):
+    def __call__(self, x, rng, **kwargs):
         time_rng, noise_rng = random.split(rng, 2)
 
         # (bs, seq_len, num_classes), in the range [-1, 1]

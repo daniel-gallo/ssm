@@ -132,12 +132,13 @@ def load_train_state(H: Hyperparams):
 
 @partial(jax.jit, static_argnums=0)
 def train_iter(H: Hyperparams, S: TrainState, batch):
-    rng, rng_iter = random.split(S.rng)
+    rng, rng_iter, rng_dropout = random.split(S.rng, 3)
 
     def lossfun(weights):
         # TODO: use JAX rng instead of FLAX (temporary fix for the S4 code)
         return H.model.apply(
-            weights, batch, rng_iter, rngs={"dropout": rng_iter}
+            weights, batch, rng_iter, training=True,
+            rngs={"dropout": rng_dropout}
         )
 
     gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
