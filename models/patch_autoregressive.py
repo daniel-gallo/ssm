@@ -108,8 +108,7 @@ class ResBlock(nn.Module):
 
         z = nn.LayerNorm()(x) if self.H.use_norm else x
         z = self.layer(z)
-        if training and self.H.dropout_rate > 0:
-            z = nn.Dropout(self.H.dropout_rate)(z)
+        z = nn.Dropout(self.H.dropout_rate, deterministic=not training)(z)
         z = z * self.last_scale
         return x + z
 
