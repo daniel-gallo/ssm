@@ -4,6 +4,7 @@ import flax.linen as nn
 import jax.numpy as jnp
 import optax
 from einops import rearrange
+from jax import lax, random
 
 from hps import Hyperparams
 
@@ -81,9 +82,14 @@ class AR(nn.Module):
 
         return x
 
-    def sample(self, x, rng):
+    def sample(self, gen_len, n_samples, rng):
         # TODO: implement
-        raise NotImplementedError
+        x = jnp.zeros((n_samples, gen_len, self.H.data_num_channels), "int32")
+
+        def fix_point(i, x):
+            return random.categorical(rng, self(x), -1)
+
+        return lax.fori_loop(0, gen_len, fix_point, x)
 
 
 class CNN(nn.Module):
