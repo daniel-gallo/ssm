@@ -55,6 +55,7 @@ class PatchARHyperparams(Hyperparams):
     ff_expand: int = 2
     cnn_kernel_size: int = 3
     block_last_scale: float = 0.125
+    dropout_rate: float = 0.0
 
     @property
     def model(self):
@@ -102,11 +103,12 @@ class ResBlock(nn.Module):
     last_scale: float = 1.0
 
     @nn.compact
-    def __call__(self, x, deterministic=False):
+    def __call__(self, x, training=False):
         bs, seq_len, dim = x.shape
 
         z = nn.LayerNorm()(x) if self.H.use_norm else x
         z = self.layer(z)
+        z = nn.Dropout(self.H.dropout_rate, deterministic=not training)(z)
         z = z * self.last_scale
         return x + z
 
@@ -182,7 +184,7 @@ class SkipBlock(nn.Module):
     pool_feature: int = 1
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, training=False):
         in_features = x.shape[-1]
 
         def _conv_block(expand=None, last_scale=1.0):
@@ -209,19 +211,27 @@ class SkipBlock(nn.Module):
         z = x
 
         for _ in range(self.conv_blocks):
-            z = _conv_block(self.H.ff_expand, self.H.block_last_scale)(z)
-            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(z)
+            z = _conv_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, training
+            )
+            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, training
+            )
 
         for _ in range(self.temporal_blocks):
-            z = _temporal_block(z.shape[-1], self.H.block_last_scale)(z)
-            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(z)
+            z = _temporal_block(z.shape[-1], self.H.block_last_scale)(
+                z, training
+            )
+            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, training
+            )
 
         z = DownPool(
             self.H,
             self.pool_temporal,
             self.H.base_dim * self.pool_feature,
         )(z)
-        z = self.inner_layer(z)
+        z = self.inner_layer(z, training)
         z = UpPool(
             self.H,
             self.pool_temporal,
@@ -229,12 +239,20 @@ class SkipBlock(nn.Module):
         )(z)
 
         for _ in range(self.temporal_blocks):
-            z = _temporal_block(z.shape[-1], self.H.block_last_scale)(z)
-            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(z)
+            z = _temporal_block(z.shape[-1], self.H.block_last_scale)(
+                z, training
+            )
+            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, training
+            )
 
         for _ in range(self.conv_blocks):
-            z = _conv_block(self.H.ff_expand, self.H.block_last_scale)(z)
-            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(z)
+            z = _conv_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, training
+            )
+            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, training
+            )
 
         match self.H.skip_residual:
             case "add":
@@ -252,7 +270,7 @@ class TemporalStack(nn.Module):
     temporal_blocks: int = 1
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, training=False):
         def _temporal_block(d_out, last_scale=1.0):
             return ResBlock(
                 self.H,
@@ -268,8 +286,12 @@ class TemporalStack(nn.Module):
             )
 
         for _ in range(self.temporal_blocks):
-            x = _temporal_block(x.shape[-1], self.H.block_last_scale)(x)
-            x = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(x)
+            x = _temporal_block(x.shape[-1], self.H.block_last_scale)(
+                x, training
+            )
+            x = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                x, training
+            )
 
         return x
 
@@ -308,14 +330,14 @@ class PatchARModel(nn.Module):
             )
         self.temporal_pyramid = block
 
-    def evaluate(self, x):
+    def evaluate(self, x, training=False):
         batch_size, seq_len, _ = x.shape
 
         x = self.H.data_preprocess_fn(x)
         x = jnp.pad(x[:, :-1, :], ((0, 0), (1, 0), (0, 0)))
         x = self.input_mlp(x)
 
-        x = self.temporal_pyramid(x)
+        x = self.temporal_pyramid(x, training)
 
         x = self.norm(x)
 
@@ -329,8 +351,8 @@ class PatchARModel(nn.Module):
             ),
         )
 
-    def __call__(self, x, rng=None):
-        return loss_and_metrics(self.evaluate(x), x)
+    def __call__(self, x, rng=None, training=False):
+        return loss_and_metrics(self.evaluate(x, training), x)
 
     def sample_prior(self, gen_len, n_samples, rng):
         x = jnp.zeros((n_samples, gen_len, self.H.data_num_channels), "int32")

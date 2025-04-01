@@ -412,7 +412,7 @@ class S4(nn.Module):
             layer={"N": self.H.d_ssm, "l_max": self.H.data_seq_length},
         )
 
-    def __call__(self, x, rng):
+    def __call__(self, x, rng, **kwargs):
         # Training: CNN mode (decode=False)
         logits = self.train_model(self.H.data_preprocess_fn(x))
         logits = logits[:, :, None, :]  # Add channel dim

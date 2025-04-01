@@ -303,7 +303,7 @@ class VSSM(nn.Module):
         self.encoder = Encoder(H=self.H)
         self.decoder = Decoder(H=self.H)
 
-    def __call__(self, x, rng):
+    def __call__(self, x, rng, **kwargs):
         logits, kls = self.decoder(self.encoder(x), rng)
         return loss_and_metrics(logits, kls, x)
 

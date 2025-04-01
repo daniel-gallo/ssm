@@ -265,7 +265,7 @@ class ARModel(nn.Module):
 
         return x
 
-    def __call__(self, x, rng=None):
+    def __call__(self, x, rng=None, **kwargs):
         return loss_and_metrics(self.evaluate(x), x)
 
     def sample_prior(self, gen_len, n_samples, rng):
