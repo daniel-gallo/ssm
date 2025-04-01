@@ -11,7 +11,7 @@ from hps import Hyperparams
 @dataclasses.dataclass(frozen=True)
 class HaarHyperparams(Hyperparams):
     n: int = 5
-    ar_d: int = 64
+    d: int = 64
     ar_blocks: int = 4
 
     @property
@@ -72,15 +72,15 @@ class ARBlock(nn.Module):
     @nn.compact
     def __call__(self, x):
         x = x + nn.Sequential(
-            [nn.LayerNorm(), nn.RNN(nn.OptimizedLSTMCell(self.H.ar_d))]
+            [nn.LayerNorm(), nn.RNN(nn.OptimizedLSTMCell(self.H.d))]
         )(x)
 
         x = x + nn.Sequential(
             [
                 nn.LayerNorm(),
-                nn.Dense(4 * self.H.ar_d),
+                nn.Dense(4 * self.H.d),
                 nn.gelu,
-                nn.Dense(self.H.ar_d),
+                nn.Dense(self.H.d),
             ]
         )(x)
 
@@ -91,8 +91,8 @@ class AR(nn.Module):
     H: HaarHyperparams
 
     def setup(self):
-        self.bos = self.param("bos", nn.initializers.normal(), self.H.ar_d)
-        self.initial = nn.Dense(features=self.H.ar_d)
+        self.bos = self.param("bos", nn.initializers.normal(), self.H.d)
+        self.initial = nn.Dense(features=self.H.d)
         self.blocks = [ARBlock(self.H) for _ in range(self.H.ar_blocks)]
         self.cls_head = nn.Dense(features=self.H.data_num_cats)
 
@@ -104,7 +104,7 @@ class AR(nn.Module):
     def __call__(self, x):
         bs = len(x)
         x = rearrange(x, "bs seq -> (bs seq)")
-        x = get_timestep_embedding(x, self.H.ar_d)
+        x = get_timestep_embedding(x, self.H.d)
         x = rearrange(x, "(bs seq) d -> bs seq d", bs=bs)
 
         x = self.initial(x)
@@ -125,20 +125,24 @@ class CNN(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        x = self.H.data_preprocess_fn(x)
-        x = x[:, :, jnp.newaxis]
+        bs = len(x)
+        x = rearrange(x, "bs seq -> (bs seq)")
+        x = get_timestep_embedding(x, self.H.d)
+        x = rearrange(x, "(bs seq) d -> bs seq d", bs=bs)
+        # x = self.H.data_preprocess_fn(x)
+        # x = x[:, :, jnp.newaxis]
 
         # TODO: use a more powerful model
         x = nn.Sequential(
             [
-                nn.Conv(features=2, kernel_size=3),
-                nn.relu,
-                nn.Conv(features=4, kernel_size=3),
-                nn.relu,
-                nn.Conv(features=8, kernel_size=3),
-                nn.relu,
-                nn.ConvTranspose(features=16, kernel_size=4, strides=2),
-                nn.relu,
+                nn.Conv(features=self.H.d, kernel_size=3),
+                nn.gelu,
+                nn.Conv(features=self.H.d, kernel_size=3),
+                nn.gelu,
+                nn.Conv(features=self.H.d, kernel_size=3),
+                nn.gelu,
+                nn.ConvTranspose(features=self.H.d, kernel_size=4, strides=2),
+                nn.gelu,
                 nn.Conv(features=self.H.data_num_cats, kernel_size=3),
             ]
         )(x)
