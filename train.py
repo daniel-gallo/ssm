@@ -21,6 +21,7 @@ from log_util import log, logprint, logtrain
 from models import (
     ARHyperparams,
     DiffusionHyperparams,
+    HaarHyperparams,
     PatchARHyperparams,
     S4Hyperparams,
     VSSMHyperparams,
@@ -251,6 +252,7 @@ def main():
             "ar": ARHyperparams,
             "patch-ar": PatchARHyperparams,
             "diffusion": DiffusionHyperparams,
+            "haar": HaarHyperparams,
         },
         as_positional=False,
     )
