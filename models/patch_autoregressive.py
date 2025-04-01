@@ -55,7 +55,7 @@ class PatchARHyperparams(Hyperparams):
     ff_expand: int = 2
     cnn_kernel_size: int = 3
     block_last_scale: float = 0.125
-    dropout_rate: float = 0.
+    dropout_rate: float = 0.0
 
     @property
     def model(self):
@@ -211,23 +211,27 @@ class SkipBlock(nn.Module):
         z = x
 
         for _ in range(self.conv_blocks):
-            z = _conv_block(self.H.ff_expand, self.H.block_last_scale)(z,
-                                                                       training)
-            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(z,
-                                                                      training)
+            z = _conv_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, training
+            )
+            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, training
+            )
 
         for _ in range(self.temporal_blocks):
-            z = _temporal_block(z.shape[-1], self.H.block_last_scale)(z,
-                                                                      training)
-            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(z,
-                                                                      training)
+            z = _temporal_block(z.shape[-1], self.H.block_last_scale)(
+                z, training
+            )
+            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, training
+            )
 
         z = DownPool(
             self.H,
             self.pool_temporal,
             self.H.base_dim * self.pool_feature,
         )(z)
-        z = self.inner_layer(z)
+        z = self.inner_layer(z, training)
         z = UpPool(
             self.H,
             self.pool_temporal,
@@ -235,16 +239,20 @@ class SkipBlock(nn.Module):
         )(z)
 
         for _ in range(self.temporal_blocks):
-            z = _temporal_block(z.shape[-1], self.H.block_last_scale)(z,
-                                                                      training)
-            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(z,
-                                                                      training)
+            z = _temporal_block(z.shape[-1], self.H.block_last_scale)(
+                z, training
+            )
+            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, training
+            )
 
         for _ in range(self.conv_blocks):
-            z = _conv_block(self.H.ff_expand, self.H.block_last_scale)(z,
-                                                                       training)
-            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(z,
-                                                                      training)
+            z = _conv_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, training
+            )
+            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, training
+            )
 
         match self.H.skip_residual:
             case "add":
@@ -278,10 +286,12 @@ class TemporalStack(nn.Module):
             )
 
         for _ in range(self.temporal_blocks):
-            x = _temporal_block(x.shape[-1], self.H.block_last_scale)(x,
-                                                                      training)
-            x = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(x,
-                                                                      training)
+            x = _temporal_block(x.shape[-1], self.H.block_last_scale)(
+                x, training
+            )
+            x = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                x, training
+            )
 
         return x
 

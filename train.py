@@ -137,8 +137,11 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
     def lossfun(weights):
         # TODO: use JAX rng instead of FLAX (temporary fix for the S4 code)
         return H.model.apply(
-            weights, batch, rng_iter, training=True,
-            rngs={"dropout": rng_dropout}
+            weights,
+            batch,
+            rng_iter,
+            training=True,
+            rngs={"dropout": rng_dropout},
         )
 
     gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
