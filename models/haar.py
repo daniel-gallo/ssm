@@ -11,7 +11,8 @@ from hps import Hyperparams
 @dataclasses.dataclass(frozen=True)
 class HaarHyperparams(Hyperparams):
     n: int = 5
-    ar_d: int = 32
+    ar_d: int = 64
+    ar_blocks: int = 4
 
     @property
     def model(self):
@@ -55,14 +56,44 @@ def debug(prefix, x):
     }
 
 
+def get_timestep_embedding(timesteps, d):
+    max_period = 10_000
+    half = d // 2
+
+    freqs = jnp.exp(-jnp.log(max_period) * jnp.arange(half) / half)
+    args = timesteps[:, None] * freqs[None, :]
+    embedding = jnp.concatenate([jnp.cos(args), jnp.sin(args)], axis=-1)
+    return embedding
+
+
+class ARBlock(nn.Module):
+    H: HaarHyperparams
+
+    @nn.compact
+    def __call__(self, x):
+        x = x + nn.Sequential(
+            [nn.LayerNorm(), nn.RNN(nn.OptimizedLSTMCell(self.H.ar_d))]
+        )(x)
+
+        x = x + nn.Sequential(
+            [
+                nn.LayerNorm(),
+                nn.Dense(4 * self.H.ar_d),
+                nn.gelu,
+                nn.Dense(self.H.ar_d),
+            ]
+        )(x)
+
+        return x
+
+
 class AR(nn.Module):
     H: HaarHyperparams
 
     def setup(self):
         self.bos = self.param("bos", nn.initializers.normal(), self.H.ar_d)
         self.initial = nn.Dense(features=self.H.ar_d)
-        # TODO: use a more powerful model
-        self.rnn = nn.RNN(nn.OptimizedLSTMCell(self.H.ar_d))
+        self.blocks = [ARBlock(self.H) for _ in range(self.H.ar_blocks)]
         self.cls_head = nn.Dense(features=self.H.data_num_cats)
 
     def shift_right(self, x):
@@ -71,12 +102,15 @@ class AR(nn.Module):
         return x
 
     def __call__(self, x):
-        x = self.H.data_preprocess_fn(x)
-        x = x[:, :, jnp.newaxis]
+        bs = len(x)
+        x = rearrange(x, "bs seq -> (bs seq)")
+        x = get_timestep_embedding(x, self.H.ar_d)
+        x = rearrange(x, "(bs seq) d -> bs seq d", bs=bs)
 
         x = self.initial(x)
         x = self.shift_right(x)
-        x = self.rnn(x)
+        for block in self.blocks:
+            x = block(x)
         x = self.cls_head(x)
 
         return x
@@ -135,7 +169,7 @@ class Haar(nn.Module):
         metrics = {}
 
         logits = AR(self.H)(avgs[0])
-        a_i = jnp.argmax(logits, axis=-1).astype(float)
+        a_i = avgs[0].astype(float)
         metrics["a_0"] = cross_entropy(logits, avgs[0])
 
         for i in range(self.H.n):
