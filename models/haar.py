@@ -3,8 +3,7 @@ import dataclasses
 import flax.linen as nn
 import jax.numpy as jnp
 import optax
-from einops import rearrange, repeat
-from jax import random
+from einops import rearrange
 
 from hps import Hyperparams
 
@@ -48,16 +47,12 @@ def cross_entropy(logits, labels):
     )
 
 
-def gaussian_loss(mu, sigma, ground_truth):
-    sigma += 0.1
-    # TODO: is it okay to ignore all the other terms?
-    loss = (ground_truth - mu) ** 2 / (2 * sigma**2)
-    return jnp.mean(loss)
-
-
-def gaussian_sample(rng, mu, sigma):
-    z = random.normal(rng, mu.shape)
-    return mu + sigma * z
+def debug(prefix, x):
+    return {
+        f"debug-{prefix}-norm": jnp.linalg.norm(x),
+        f"debug-{prefix}-min": jnp.min(x),
+        f"debug-{prefix}-max": jnp.max(x),
+    }
 
 
 class AR(nn.Module):
@@ -92,9 +87,13 @@ class AR(nn.Module):
 
 
 class CNN(nn.Module):
+    H: HaarHyperparams
+
     @nn.compact
     def __call__(self, x):
+        x = self.H.data_preprocess_fn(x)
         x = x[:, :, jnp.newaxis]
+
         # TODO: use a more powerful model
         x = nn.Sequential(
             [
@@ -104,14 +103,13 @@ class CNN(nn.Module):
                 nn.relu,
                 nn.Conv(features=8, kernel_size=3),
                 nn.relu,
-                nn.Conv(features=2, kernel_size=1),
+                nn.ConvTranspose(features=16, kernel_size=4, strides=2),
+                nn.relu,
+                nn.Conv(features=self.H.data_num_cats, kernel_size=3),
             ]
         )(x)
-        x = nn.Dense(features=2, kernel_init=nn.initializers.zeros)(x)
-        mu = x[:, :, 0]
-        log_sigma = x[:, :, 1]
-        sigma = jnp.exp(log_sigma)
-        return mu, sigma
+
+        return x
 
 
 class Haar(nn.Module):
@@ -134,30 +132,24 @@ class Haar(nn.Module):
     @nn.compact
     def __call__(self, x, rng):
         avgs, diffs = self.avgs_and_diffs(x)
-        rngs = random.split(rng, self.H.n)
-        losses = {}
+        metrics = {}
 
         logits = AR(self.H)(avgs[0])
         a_i = jnp.argmax(logits, axis=-1).astype(float)
-        losses["ar_loss"] = cross_entropy(logits, avgs[0])
+        metrics["a_0"] = cross_entropy(logits, avgs[0])
 
         for i in range(self.H.n):
-            mu_i, sigma_i = CNN()(a_i)
-            d_i = gaussian_sample(rngs[i], mu_i, sigma_i)
-            losses[f"d_{i}"] = gaussian_loss(mu_i, sigma_i, diffs[i])
-            a_i = up(a_i, d_i)
-            # Note that a_i <- inteleave(a_i + d_i, a_i - d_i)
-            # Thus, the means are a_i (new) and sigma_i (repeated)
-            losses[f"a_{i + 1}"] = gaussian_loss(
-                a_i,
-                repeat(sigma_i, "bs seq -> bs (seq two)", two=2),
-                avgs[i + 1],
-            )
+            logits = CNN(self.H)(a_i)
+            # a_i = jnp.argmax(logits, axis=-1).astype(float)
+            a_i = avgs[i + 1].astype(float)
+            metrics[f"a_{i + 1}"] = cross_entropy(logits, avgs[i + 1])
 
         loss = sum(
-            value for key, value in losses.items() if not key.startswith("x")
+            value
+            for key, value in metrics.items()
+            if not key.startswith("debug")
         )
-        return loss, {"loss": loss} | losses
+        return loss, {"loss": loss} | metrics
 
     def sample_prior(self, gen_len, n_samples, rng):
         # TODO: implement
