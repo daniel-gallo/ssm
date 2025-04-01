@@ -41,7 +41,7 @@ class Hyperparams:
 
     # Dataset
     dataset: str = "binarized-mnist"
-    # Other useful meta-data, set automatically
+    # Other useful meta-data, set automatically during data loading
     data_seq_length: Optional[int] = None
     data_num_channels: Optional[int] = None
     data_num_cats: Optional[int] = None
@@ -100,6 +100,11 @@ class Hyperparams:
                 "num_samples_per_eval",
                 "sample_dir",
                 "steps_per_print",
+                "data_seq_length",
+                "data_num_channels",
+                "data_num_cats",
+                "data_num_training_samples",
+                "data_framerate",
             ],
         )
         all_attributes = dataclasses.asdict(self)
