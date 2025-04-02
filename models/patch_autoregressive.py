@@ -66,7 +66,7 @@ class PatchARHyperparams(Hyperparams):
     ff_expand: int = 2
     cnn_kernel_size: int = 3
     block_last_scale: float = 0.125
-    dropout_rate: float = 0.5
+    dropout_rate: float = 0.0
 
     @property
     def model(self):
