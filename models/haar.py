@@ -103,18 +103,16 @@ class AR(nn.Module):
         return x
 
     def __call__(self, x):
-        bs = len(x)
+        bs, seq_len = x.shape
         x = rearrange(x, "bs seq -> (bs seq)")
         x = get_timestep_embedding(x, self.H.d)
-        x = rearrange(x, "(bs seq) d -> bs seq d", bs=bs)
+        x = rearrange(x, "(bs seq) d -> bs seq (d)", bs=bs)
 
         x = self.initial(x)
         x = self.shift_right(x)
         for block in self.blocks:
             x = block(x)
-        x = self.cls_head(x)
-
-        return x
+        return self.cls_head(x)
 
     def sample(self, gen_len, n_samples, rng):
         # TODO: implement
@@ -131,10 +129,10 @@ class CNN(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        bs = len(x)
+        bs, seq_len = x.shape
         x = rearrange(x, "bs seq -> (bs seq)")
         x = get_timestep_embedding(x, self.H.d)
-        x = rearrange(x, "(bs seq) d -> bs seq d", bs=bs)
+        x = rearrange(x, "(bs seq) d -> bs seq (d)", bs=bs)
         # x = self.H.data_preprocess_fn(x)
         # x = x[:, :, jnp.newaxis]
 
@@ -209,4 +207,4 @@ class Haar(nn.Module):
             block_rng, rng = random.split(rng, 2)
             x = random.categorical(block_rng, logits, -1)
 
-        return x
+        return jnp.expand_dims(x, -1)
