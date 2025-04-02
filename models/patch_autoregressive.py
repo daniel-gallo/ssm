@@ -26,7 +26,7 @@ def fourier_features(x, d):
     freqs = jnp.exp(-jnp.log(max_period) * jnp.arange(half) / half)
     args = x[..., None] * freqs
     embedding = jnp.concatenate([jnp.cos(args), jnp.sin(args)], axis=-1)
-    return rearrange(embedding, 'b t c f -> b t (c f)')
+    return rearrange(embedding, "b t c f -> b t (c f)")
 
 
 def loss_and_metrics(logits, x):
