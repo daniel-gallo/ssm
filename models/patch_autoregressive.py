@@ -348,7 +348,7 @@ class PatchARModel(nn.Module):
         inp = x
 
         if self.H.input_fourier_features:
-            assert self.H.base_dim // self.H.data_num_channels == 0
+            assert self.H.base_dim % self.H.data_num_channels == 0
             x = fourier_features(
                 inp, self.H.base_dim // self.H.data_num_channels
             )
