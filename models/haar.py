@@ -4,6 +4,7 @@ import flax.linen as nn
 import jax.numpy as jnp
 import optax
 from einops import rearrange
+from jax import lax, random
 
 from hps import Hyperparams
 
@@ -102,22 +103,25 @@ class AR(nn.Module):
         return x
 
     def __call__(self, x):
-        bs = len(x)
+        bs, seq_len = x.shape
         x = rearrange(x, "bs seq -> (bs seq)")
         x = get_timestep_embedding(x, self.H.d)
-        x = rearrange(x, "(bs seq) d -> bs seq d", bs=bs)
+        x = rearrange(x, "(bs seq) d -> bs seq (d)", bs=bs)
 
         x = self.initial(x)
         x = self.shift_right(x)
         for block in self.blocks:
             x = block(x)
-        x = self.cls_head(x)
+        return self.cls_head(x)
 
-        return x
-
-    def sample(self, x, rng):
+    def sample(self, gen_len, n_samples, rng):
         # TODO: implement
-        raise NotImplementedError
+        x = jnp.zeros((n_samples, gen_len), "int32")
+
+        def fix_point(i, x):
+            return random.categorical(rng, self(x), -1)
+
+        return lax.fori_loop(0, gen_len, fix_point, x)
 
 
 class CNN(nn.Module):
@@ -125,10 +129,10 @@ class CNN(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        bs = len(x)
+        bs, seq_len = x.shape
         x = rearrange(x, "bs seq -> (bs seq)")
         x = get_timestep_embedding(x, self.H.d)
-        x = rearrange(x, "(bs seq) d -> bs seq d", bs=bs)
+        x = rearrange(x, "(bs seq) d -> bs seq (d)", bs=bs)
         # x = self.H.data_preprocess_fn(x)
         # x = x[:, :, jnp.newaxis]
 
@@ -153,6 +157,10 @@ class CNN(nn.Module):
 class Haar(nn.Module):
     H: HaarHyperparams
 
+    def setup(self):
+        self.ar = AR(self.H)
+        self.cnn = [CNN(self.H) for _ in range(self.H.n)]
+
     def avgs_and_diffs(self, x):
         x = x.squeeze()
 
@@ -167,17 +175,16 @@ class Haar(nn.Module):
         diffs = diffs[::-1]
         return avgs, diffs
 
-    @nn.compact
-    def __call__(self, x, rng):
+    def __call__(self, x, rng, training=False):
         avgs, diffs = self.avgs_and_diffs(x)
         metrics = {}
 
-        logits = AR(self.H)(avgs[0])
+        logits = self.ar(avgs[0])
         a_i = avgs[0].astype(float)
         metrics["a_0"] = cross_entropy(logits, avgs[0])
 
         for i in range(self.H.n):
-            logits = CNN(self.H)(a_i)
+            logits = self.cnn[i](a_i)
             # a_i = jnp.argmax(logits, axis=-1).astype(float)
             a_i = avgs[i + 1].astype(float)
             metrics[f"a_{i + 1}"] = cross_entropy(logits, avgs[i + 1])
@@ -191,4 +198,13 @@ class Haar(nn.Module):
 
     def sample_prior(self, gen_len, n_samples, rng):
         # TODO: implement
-        return jnp.zeros((n_samples, gen_len, self.H.data_num_channels))
+        init_len = gen_len // (2**self.H.n)
+        block_rng, rng = random.split(rng, 2)
+        x = self.ar.sample(init_len, n_samples, block_rng)
+
+        for i in range(self.H.n):
+            logits = self.cnn[i](x)
+            block_rng, rng = random.split(rng, 2)
+            x = random.categorical(block_rng, logits, -1)
+
+        return jnp.expand_dims(x, -1)
