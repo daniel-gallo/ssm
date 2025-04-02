@@ -19,14 +19,14 @@ def log_likelihood(logits, x):
     )
 
 
-def get_timestep_embedding(timesteps, d):
+def fourier_features(x, d):
     max_period = 10_000
     half = d // 2
 
     freqs = jnp.exp(-jnp.log(max_period) * jnp.arange(half) / half)
-    args = timesteps[:, None] * freqs[None, :]
+    args = x[..., None] * freqs
     embedding = jnp.concatenate([jnp.cos(args), jnp.sin(args)], axis=-1)
-    return embedding
+    return rearrange(embedding, 'b t c f -> b t (c f)')
 
 
 def loss_and_metrics(logits, x):
@@ -59,6 +59,7 @@ class PatchARHyperparams(Hyperparams):
     use_gating: bool = True
     use_temporal_cnn: bool = True
     skip_residual: Literal["add", "mean", "mlp"] = "add"
+    input_fourier_features: bool = True
 
     base_dim: int = 64
     rnn_hidden_size: int = 256
@@ -310,10 +311,11 @@ class PatchARModel(nn.Module):
     H: PatchARHyperparams
 
     def setup(self):
-        # self.input_mlp = nn.Dense(
-        #     self.H.base_dim,
-        #     bias_init=jax.nn.initializers.normal(0.5),
-        # )
+        if not self.H.input_fourier_features:
+            self.input_mlp = nn.Dense(
+                self.H.base_dim,
+                bias_init=jax.nn.initializers.normal(0.5),
+            )
 
         self.cls_mlp = nn.Sequential(
             [
@@ -343,17 +345,19 @@ class PatchARModel(nn.Module):
 
     def evaluate(self, x, training=False):
         batch_size, seq_len, _ = x.shape
+        inp = x
 
-        x = rearrange(x, "bs seq cat -> (bs seq cat)")
-        x = get_timestep_embedding(x, self.H.base_dim)
-        x = rearrange(
-            x, "(bs seq cat) d -> bs seq (cat d)", bs=batch_size, seq=seq_len
-        )
-
-        # x = self.H.data_preprocess_fn(x)
-        # TODO: what padding to apply/where (0? mid value before sine emb.)
+        if self.H.input_fourier_features:
+            assert self.H.base_dim // self.H.data_num_channels == 0
+            x = fourier_features(
+                inp, self.H.base_dim // self.H.data_num_channels
+            )
+        else:
+            x = self.H.data_preprocess_fn(x)
         x = jnp.pad(x[:, :-1, :], ((0, 0), (1, 0), (0, 0)))
-        # x = self.input_mlp(x)
+
+        if not self.H.input_fourier_features:
+            x = self.input_mlp(x)
 
         x = self.temporal_pyramid(x, training)
 
