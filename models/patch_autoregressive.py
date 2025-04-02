@@ -19,6 +19,16 @@ def log_likelihood(logits, x):
     )
 
 
+def get_timestep_embedding(timesteps, d):
+    max_period = 10_000
+    half = d // 2
+
+    freqs = jnp.exp(-jnp.log(max_period) * jnp.arange(half) / half)
+    args = timesteps[:, None] * freqs[None, :]
+    embedding = jnp.concatenate([jnp.cos(args), jnp.sin(args)], axis=-1)
+    return embedding
+
+
 def loss_and_metrics(logits, x):
     normalizer = x.size * jnp.log(2)
     ll = log_likelihood(logits, x) / normalizer
@@ -40,10 +50,10 @@ class PatchARHyperparams(Hyperparams):
     rnn: RNNHyperparams = RNNHyperparams()
 
     # Model architecture
-    pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2, 2)
-    pool_features: tuple[int, ...] = (1, 1, 1, 1, 1, 1)
-    conv_blocks: tuple[int, ...] = (4, 4, 4, 2, 2, 2)
-    temporal_blocks: tuple[int, ...] = (0, 0, 0, 0, 0, 2, 4)
+    pool_temporal: tuple[int, ...] = (4, 4, 4)
+    pool_features: tuple[int, ...] = (1, 1, 1)
+    conv_blocks: tuple[int, ...] = (4, 4, 4)
+    temporal_blocks: tuple[int, ...] = (0, 0, 2, 4)
 
     use_norm: bool = True
     use_gating: bool = True
@@ -300,10 +310,11 @@ class PatchARModel(nn.Module):
     H: PatchARHyperparams
 
     def setup(self):
-        self.input_mlp = nn.Dense(
-            self.H.base_dim,
-            bias_init=jax.nn.initializers.normal(0.5),
-        )
+        # self.input_mlp = nn.Dense(
+        #     self.H.base_dim,
+        #     bias_init=jax.nn.initializers.normal(0.5),
+        # )
+
         self.cls_mlp = nn.Sequential(
             [
                 ConvBlock(self.H, expand=2),
@@ -333,9 +344,16 @@ class PatchARModel(nn.Module):
     def evaluate(self, x, training=False):
         batch_size, seq_len, _ = x.shape
 
-        x = self.H.data_preprocess_fn(x)
+        x = rearrange(x, "bs seq cat -> (bs seq cat)")
+        x = get_timestep_embedding(x, self.H.base_dim)
+        x = rearrange(
+            x, "(bs seq cat) d -> bs seq (cat d)", bs=batch_size, seq=seq_len
+        )
+
+        # x = self.H.data_preprocess_fn(x)
+        # TODO: what padding to apply/where (0? mid value before sine emb.)
         x = jnp.pad(x[:, :-1, :], ((0, 0), (1, 0), (0, 0)))
-        x = self.input_mlp(x)
+        # x = self.input_mlp(x)
 
         x = self.temporal_pyramid(x, training)
 
