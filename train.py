@@ -27,6 +27,7 @@ from models import (
     VSSMHyperparams,
 )
 
+
 flax.config.update("flax_use_orbax_checkpointing", False)
 map = safe_map
 _mesh = jax.make_mesh((jax.device_count(),), ("batch",))
@@ -260,6 +261,7 @@ def main():
         },
         as_positional=False,
     )
+    jax.config.update('jax_default_matmul_precision', H.matmul_precision)
     log_configuration(H)
     logprint(H, "Loading data")
     H, data = load_data(H)

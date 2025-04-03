@@ -39,6 +39,12 @@ class Hyperparams:
     num_epochs: int = 30
     batch_size_eval: int = 128
 
+    # Note the semantics on GPU are different to TPU for the two
+    # lower-precision settings.
+    matmul_precision: Literal["bfloat16", "bfloat16_3x", "float32"] = (
+        "bfloat16"
+    )
+
     # Dataset
     dataset: str = "binarized-mnist"
     # Other useful meta-data, set automatically during data loading
