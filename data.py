@@ -201,7 +201,7 @@ def load_sc09(H):
         data_framerate=16000,
     )
 
-    if gfile.exists(cache_url) and not cache_file.exists():
+    if not cache_file.exists() and gfile.exists(cache_url):
         logprint(H, "Loading sc09 from GCS")
         gfile.copy(cache_url, cache_file)
 
@@ -282,7 +282,7 @@ def load_sc09_mp3(H):
         data_framerate=16000,
     )
 
-    if gfile.exists(cache_url) and not cache_file.exists():
+    if not cache_file.exists() and gfile.exists(cache_url):
         logprint(H, "Loading sc09-mp3-downsampled from GCS")
         gfile.copy(cache_url, cache_file)
 
@@ -357,7 +357,7 @@ def load_sc09_mp3_downsampled(H):
         data_framerate=8000,
     )
 
-    if gfile.exists(cache_url) and not cache_file.exists():
+    if not cache_file.exists() and gfile.exists(cache_url):
         logprint(H, "Loading sc09-mp3-downsampled from GCS")
         gfile.copy(cache_url, cache_file)
 
