@@ -39,6 +39,8 @@ class Hyperparams:
     num_epochs: int = 30
     batch_size_eval: int = 128
 
+    sample_temperature: float = 1.0
+
     # Dataset
     dataset: str = "binarized-mnist"
     # Other useful meta-data, set automatically during data loading
@@ -105,6 +107,7 @@ class Hyperparams:
                 "data_num_cats",
                 "data_num_training_samples",
                 "data_framerate",
+                "sample_temperature",
             ],
         )
         all_attributes = dataclasses.asdict(self)

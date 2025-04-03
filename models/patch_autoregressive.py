@@ -380,6 +380,6 @@ class PatchARModel(nn.Module):
         x = jnp.zeros((n_samples, gen_len, self.H.data_num_channels), "int32")
 
         def fix_point(i, x):
-            return random.categorical(rng, self.evaluate(x), -1)
+            return random.categorical(rng, self.evaluate(x) / self.H.sample_temperature, -1)
 
         return lax.fori_loop(0, gen_len, fix_point, x)
