@@ -154,7 +154,8 @@ class TemporalMixingBlock(nn.Module):
         recurrent_block = get_recurrent_block(self.H.rnn)
         z = (
             nn.LayerNorm()(
-                nn.Conv(self.d_out, self.H.cnn_kernel_size, padding="CAUSAL")(x)
+                nn.Conv(self.d_out, self.H.cnn_kernel_size, padding="CAUSAL",
+                        feature_group_count=self.d_out)(x)
             )
             if self.H.use_temporal_cnn
             else x
@@ -180,7 +181,8 @@ class ConvBlock(nn.Module):
     def __call__(self, x):
         bs, seq_len, dim = x.shape
         expand = self.expand or self.H.ff_expand
-        z = nn.Conv(dim * expand, self.H.cnn_kernel_size, padding="CAUSAL")(x)
+        z = nn.Conv(dim * expand, self.H.cnn_kernel_size, padding="CAUSAL",
+                    feature_group_count=dim)(x)
         if self.H.use_gating:
             gated_x = nn.Dense(dim * expand)(x)
             z = z * nn.gelu(gated_x)
