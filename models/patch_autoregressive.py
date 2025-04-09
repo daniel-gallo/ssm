@@ -76,15 +76,39 @@ class PatchARHyperparams(Hyperparams):
         return PatchARModel.sample_prior
 
 
-def down_pool(x, factor: int):
-    return nn.avg_pool(x, (factor,), (factor,))
+class DownPool(nn.Module):
+    factor: int
+
+    @nn.compact
+    def __call__(self, x):
+        return nn.Conv(
+            x.shape[-1],
+            self.factor,
+            self.factor,
+            padding="VALID",
+            feature_group_count=x.shape[-1],
+        )(x)
 
 
-def up_pool(x, factor: int):
-    b, t, c = x.shape
-    x = jax.image.resize(x, (b, factor * t, c), "nearest")
-    x = lax.pad(x, 0.0, ((0, 0, 0), (factor - 1, -(factor - 1), 0), (0, 0, 0)))
-    return x
+class UpPool(nn.Module):
+    factor: int
+
+    @nn.compact
+    def __call__(self, x):
+        x = nn.Conv(
+            x.shape[-1],
+            self.factor,
+            padding=self.factor - 1,
+            input_dilation=self.factor,
+            feature_group_count=x.shape[-1],
+        )(x)
+        # ensures causal relationship
+        x = lax.pad(
+            x,
+            0.0,
+            ((0, 0, 0), (self.factor - 1, -(self.factor - 1), 0), (0, 0, 0)),
+        )
+        return x
 
 
 class ResBlock(nn.Module):
@@ -213,9 +237,13 @@ class SkipBlock(nn.Module):
                 z, training
             )
 
-        z = down_pool(z, self.pool_temporal)
+        z = DownPool(
+            self.pool_temporal,
+        )(z)
         z = self.inner_layer(z, training)
-        z = up_pool(z, self.pool_temporal)
+        z = UpPool(
+            self.pool_temporal,
+        )(z)
 
         for _ in range(self.temporal_blocks):
             z = _temporal_block(z.shape[-1], self.H.block_last_scale)(
