@@ -51,7 +51,6 @@ class PatchARHyperparams(Hyperparams):
 
     # Model architecture
     pool_temporal: tuple[int, ...] = (4, 4, 4)
-    pool_features: tuple[int, ...] = (1, 1, 1)
     conv_blocks: tuple[int, ...] = (4, 4, 4)
     temporal_blocks: tuple[int, ...] = (0, 0, 2, 4)
 
@@ -77,35 +76,15 @@ class PatchARHyperparams(Hyperparams):
         return PatchARModel.sample_prior
 
 
-class DownPool(nn.Module):
-    H: PatchARHyperparams
-    pool_temporal: int
-    out_features: int
-
-    def setup(self):
-        self.linear = nn.Dense(self.out_features)
-
-    def __call__(self, x):
-        batch_size, seq_len, dim = x.shape
-        x = rearrange(x, "...(l m) d -> ... l (m d)", m=self.pool_temporal)
-        return self.linear(x)
+def down_pool(x, factor: int):
+    return nn.avg_pool(x, (factor,), (factor,))
 
 
-class UpPool(nn.Module):
-    H: PatchARHyperparams
-    pool_temporal: int
-    out_features: int
-
-    def setup(self):
-        self.linear = nn.Dense(self.out_features * self.pool_temporal)
-
-    def __call__(self, x):
-        batch_size, seq_len, dim = x.shape
-        x = self.linear(x)
-        # ensures causal relationship
-        x = jnp.pad(x[:, :-1, :], ((0, 0), (1, 0), (0, 0)))
-        x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.pool_temporal)
-        return x
+def up_pool(x, factor: int):
+    b, t, c = x.shape
+    x = jax.image.resize(x, (b, factor * t, c), "nearest")
+    x = lax.pad(x, 0.0, ((0, 0, 0), (factor - 1, -(factor - 1), 0), (0, 0, 0)))
+    return x
 
 
 class ResBlock(nn.Module):
@@ -192,12 +171,9 @@ class SkipBlock(nn.Module):
     conv_blocks: int = 0
     temporal_blocks: int = 0
     pool_temporal: int = 1
-    pool_feature: int = 1
 
     @nn.compact
     def __call__(self, x, training=False):
-        in_features = x.shape[-1]
-
         def _conv_block(expand=None, last_scale=1.0):
             return ResBlock(
                 self.H,
@@ -237,17 +213,9 @@ class SkipBlock(nn.Module):
                 z, training
             )
 
-        z = DownPool(
-            self.H,
-            self.pool_temporal,
-            self.H.base_dim * self.pool_feature,
-        )(z)
+        z = down_pool(z, self.pool_temporal)
         z = self.inner_layer(z, training)
-        z = UpPool(
-            self.H,
-            self.pool_temporal,
-            in_features,
-        )(z)
+        z = up_pool(z, self.pool_temporal)
 
         for _ in range(self.temporal_blocks):
             z = _temporal_block(z.shape[-1], self.H.block_last_scale)(
@@ -327,9 +295,8 @@ class PatchARModel(nn.Module):
         self.norm = nn.LayerNorm()
 
         block = TemporalStack(self.H, self.H.temporal_blocks[-1])
-        for p_temporal, p_features, conv_blocks, temp_blocks in zip(
+        for p_temporal, conv_blocks, temp_blocks in zip(
             reversed(self.H.pool_temporal),
-            reversed(self.H.pool_features),
             reversed(self.H.conv_blocks),
             reversed(self.H.temporal_blocks[:-1]),
         ):
@@ -339,7 +306,6 @@ class PatchARModel(nn.Module):
                 conv_blocks=conv_blocks,
                 temporal_blocks=temp_blocks,
                 pool_temporal=p_temporal,
-                pool_feature=p_features,
             )
         self.temporal_pyramid = block
 
