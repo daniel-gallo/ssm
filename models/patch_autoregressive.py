@@ -194,20 +194,18 @@ class TemporalMixingBlock(nn.Module):
 
 class ConvBlock(nn.Module):
     H: PatchARHyperparams
-    expand: int | None = None
 
     @nn.compact
     def __call__(self, x):
         bs, seq_len, dim = x.shape
-        expand = self.expand or self.H.ff_expand
         z = nn.Conv(
-            dim * expand,
+            dim,
             self.H.conv_kernel_size,
             padding="CAUSAL",
             feature_group_count=self.H.conv_feature_group_count,
         )(x)
         if self.H.use_gating:
-            gated_x = nn.Dense(dim * expand)(x)
+            gated_x = nn.Dense(dim)(x)
             z = z * nn.gelu(gated_x)
         else:
             z = nn.gelu(z)
@@ -223,10 +221,10 @@ class SkipBlock(nn.Module):
 
     @nn.compact
     def __call__(self, x, training=False):
-        def _conv_block(expand=None, last_scale=1.0):
+        def _conv_block(last_scale=1.0):
             return ResBlock(
                 self.H,
-                layer=ConvBlock(self.H, expand=expand),
+                layer=ConvBlock(self.H),
                 last_scale=last_scale,
             )
 
@@ -247,7 +245,7 @@ class SkipBlock(nn.Module):
         z = x
 
         for _ in range(self.conv_blocks):
-            z = _conv_block(self.H.ff_expand, self.H.block_last_scale)(
+            z = _conv_block(self.H.block_last_scale)(
                 z, training
             )
             z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
@@ -281,7 +279,7 @@ class SkipBlock(nn.Module):
             )
 
         for _ in range(self.conv_blocks):
-            z = _conv_block(self.H.ff_expand, self.H.block_last_scale)(
+            z = _conv_block(self.H.block_last_scale)(
                 z, training
             )
             z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
@@ -347,8 +345,8 @@ class PatchARModel(nn.Module):
 
         self.cls_mlp = nn.Sequential(
             [
-                ConvBlock(self.H, expand=2),
-                ConvBlock(self.H, expand=2),
+                ConvBlock(self.H),
+                ConvBlock(self.H),
                 nn.Dense(self.H.data_num_cats),
             ]
         )
