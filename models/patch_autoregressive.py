@@ -51,7 +51,6 @@ class PatchARHyperparams(Hyperparams):
 
     # Model architecture
     pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2)
-    pool_features: tuple[int, ...] = (1, 2, 4, 4, 4)
     conv_blocks: tuple[int, ...] = (4, 4, 4, 4, 4)
     temporal_blocks: tuple[int, ...] = (0, 0, 2, 4, 4, 4)
 
@@ -68,6 +67,8 @@ class PatchARHyperparams(Hyperparams):
     block_last_scale: float = 0.125
     dropout_rate: float = 0.0
 
+    conv_pooling: bool = True
+
     @property
     def model(self):
         return PatchARModel(self)
@@ -79,32 +80,48 @@ class PatchARHyperparams(Hyperparams):
 
 class DownPool(nn.Module):
     H: PatchARHyperparams
-    pool_temporal: int
-    out_features: int
+    factor: int
 
-    def setup(self):
-        self.linear = nn.Dense(self.out_features)
-
+    @nn.compact
     def __call__(self, x):
-        batch_size, seq_len, dim = x.shape
-        x = rearrange(x, "...(l m) d -> ... l (m d)", m=self.pool_temporal)
-        return self.linear(x)
+        if self.H.conv_pooling:
+            return nn.Conv(
+                x.shape[-1],
+                self.factor,
+                self.factor,
+                padding="VALID",
+                feature_group_count=x.shape[-1],
+            )(x)
+        else:
+            batch_size, seq_len, dim = x.shape
+            x = rearrange(x, "...(l m) d -> ... l (m d)", m=self.factor)
+            return nn.Dense(dim)(x)
 
 
 class UpPool(nn.Module):
     H: PatchARHyperparams
-    pool_temporal: int
-    out_features: int
+    factor: int
 
-    def setup(self):
-        self.linear = nn.Dense(self.out_features * self.pool_temporal)
-
+    @nn.compact
     def __call__(self, x):
-        batch_size, seq_len, dim = x.shape
-        x = self.linear(x)
-        # ensures causal relationship
-        x = jnp.pad(x[:, :-1, :], ((0, 0), (1, 0), (0, 0)))
-        x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.pool_temporal)
+        if self.H.conv_pooling:
+            x = nn.Conv(
+                x.shape[-1],
+                self.factor,
+                padding=self.factor - 1,
+                input_dilation=self.factor,
+                feature_group_count=x.shape[-1],
+            )(x)
+        else:
+            batch_size, seq_len, dim = x.shape
+            x = nn.Dense(dim * self.factor)(x)
+            x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.factor)
+        # ensure causal
+        x = lax.pad(
+            x,
+            0.0,
+            ((0, 0, 0), (self.factor - 1, -(self.factor - 1), 0), (0, 0, 0)),
+        )
         return x
 
 
@@ -192,12 +209,9 @@ class SkipBlock(nn.Module):
     conv_blocks: int = 0
     temporal_blocks: int = 0
     pool_temporal: int = 1
-    pool_feature: int = 1
 
     @nn.compact
     def __call__(self, x, training=False):
-        in_features = x.shape[-1]
-
         def _conv_block(expand=None, last_scale=1.0):
             return ResBlock(
                 self.H,
@@ -240,13 +254,11 @@ class SkipBlock(nn.Module):
         z = DownPool(
             self.H,
             self.pool_temporal,
-            self.H.base_dim * self.pool_feature,
         )(z)
         z = self.inner_layer(z, training)
         z = UpPool(
             self.H,
             self.pool_temporal,
-            in_features,
         )(z)
 
         for _ in range(self.temporal_blocks):
@@ -332,9 +344,8 @@ class PatchARModel(nn.Module):
         self.norm = nn.LayerNorm()
 
         block = TemporalStack(self.H, self.H.temporal_blocks[-1])
-        for p_temporal, p_features, conv_blocks, temp_blocks in zip(
+        for p_temporal, conv_blocks, temp_blocks in zip(
             reversed(self.H.pool_temporal),
-            reversed(self.H.pool_features),
             reversed(self.H.conv_blocks),
             reversed(self.H.temporal_blocks[:-1]),
         ):
@@ -344,7 +355,6 @@ class PatchARModel(nn.Module):
                 conv_blocks=conv_blocks,
                 temporal_blocks=temp_blocks,
                 pool_temporal=p_temporal,
-                pool_feature=p_features,
             )
         self.temporal_pyramid = block
 
