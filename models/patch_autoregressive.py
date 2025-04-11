@@ -50,15 +50,15 @@ class PatchARHyperparams(Hyperparams):
     rnn: RNNHyperparams = RNNHyperparams()
 
     # Model architecture
-    pool_temporal: tuple[int, ...] = (4, 4, 4)
-    conv_blocks: tuple[int, ...] = (4, 4, 4)
-    temporal_blocks: tuple[int, ...] = (0, 0, 2, 4)
+    pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2)
+    conv_blocks: tuple[int, ...] = (4, 4, 4, 4, 4)
+    temporal_blocks: tuple[int, ...] = (0, 0, 2, 4, 4, 4)
 
     use_norm: bool = True
     use_gating: bool = True
     use_temporal_cnn: bool = True
     skip_residual: Literal["add", "mean", "mlp"] = "add"
-    input_fourier_features: bool = True
+    input_transform: Literal["mlp", "sine", "embed"] = "sine"
 
     base_dim: int = 64
     rnn_hidden_size: int = 256
@@ -307,11 +307,16 @@ class PatchARModel(nn.Module):
     H: PatchARHyperparams
 
     def setup(self):
-        if not self.H.input_fourier_features:
-            self.input_mlp = nn.Dense(
-                self.H.base_dim,
-                bias_init=jax.nn.initializers.normal(0.5),
-            )
+        match self.H.input_transform:
+            case "mlp":
+                self.input_mlp = nn.Dense(
+                    self.H.base_dim,
+                    bias_init=jax.nn.initializers.normal(0.5),
+                )
+            case "embed":
+                self.input_embed = nn.Embed(
+                    self.H.data_num_cats, self.H.base_dim
+                )
 
         self.cls_mlp = nn.Sequential(
             [
@@ -341,16 +346,20 @@ class PatchARModel(nn.Module):
         batch_size, seq_len, _ = x.shape
         inp = x
 
-        if self.H.input_fourier_features:
-            assert self.H.base_dim % self.H.data_num_channels == 0
-            x = fourier_features(
-                inp, self.H.base_dim // self.H.data_num_channels
-            )
-        else:
-            x = self.H.data_preprocess_fn(x)
+        match self.H.input_transform:
+            case "sine":
+                assert self.H.base_dim % self.H.data_num_channels == 0
+                x = fourier_features(
+                    inp, self.H.base_dim // self.H.data_num_channels
+                )
+            case "embed":
+                x = self.input_embed(x)
+                x = rearrange(x, "... ch cat -> ... (ch cat)")
+            case "mlp":
+                x = self.H.data_preprocess_fn(x)
         x = jnp.pad(x[:, :-1, :], ((0, 0), (1, 0), (0, 0)))
 
-        if not self.H.input_fourier_features:
+        if self.H.input_transform == "mlp":
             x = self.input_mlp(x)
 
         x = self.temporal_pyramid(x, training)
