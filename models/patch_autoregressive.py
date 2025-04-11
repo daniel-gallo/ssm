@@ -63,7 +63,8 @@ class PatchARHyperparams(Hyperparams):
     base_dim: int = 64
     rnn_hidden_size: int = 256
     ff_expand: int = 2
-    cnn_kernel_size: int = 3
+    conv_kernel_size: int = 3
+    conv_feature_group_count: int = 1
     block_last_scale: float = 0.125
     dropout_rate: float = 0.0
 
@@ -168,7 +169,12 @@ class TemporalMixingBlock(nn.Module):
         recurrent_block = get_recurrent_block(self.H.rnn)
         z = (
             nn.LayerNorm()(
-                nn.Conv(self.d_out, self.H.cnn_kernel_size, padding="CAUSAL")(x)
+                nn.Conv(
+                    self.d_out,
+                    self.H.conv_kernel_size,
+                    padding="CAUSAL",
+                    feature_group_count=self.H.conv_feature_group_count,
+                )(x)
             )
             if self.H.use_temporal_cnn
             else x
@@ -194,7 +200,12 @@ class ConvBlock(nn.Module):
     def __call__(self, x):
         bs, seq_len, dim = x.shape
         expand = self.expand or self.H.ff_expand
-        z = nn.Conv(dim * expand, self.H.cnn_kernel_size, padding="CAUSAL")(x)
+        z = nn.Conv(
+            dim * expand,
+            self.H.conv_kernel_size,
+            padding="CAUSAL",
+            feature_group_count=self.H.conv_feature_group_count,
+        )(x)
         if self.H.use_gating:
             gated_x = nn.Dense(dim * expand)(x)
             z = z * nn.gelu(gated_x)
