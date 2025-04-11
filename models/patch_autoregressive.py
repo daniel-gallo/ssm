@@ -67,6 +67,8 @@ class PatchARHyperparams(Hyperparams):
     block_last_scale: float = 0.125
     dropout_rate: float = 0.0
 
+    conv_pooling: bool = True
+
     @property
     def model(self):
         return PatchARModel(self)
@@ -77,32 +79,44 @@ class PatchARHyperparams(Hyperparams):
 
 
 class DownPool(nn.Module):
+    H: PatchARHyperparams
     factor: int
 
     @nn.compact
     def __call__(self, x):
-        return nn.Conv(
-            x.shape[-1],
-            self.factor,
-            self.factor,
-            padding="VALID",
-            feature_group_count=x.shape[-1],
-        )(x)
+        if self.H.conv_pooling:
+            return nn.Conv(
+                x.shape[-1],
+                self.factor,
+                self.factor,
+                padding="VALID",
+                feature_group_count=x.shape[-1],
+            )(x)
+        else:
+            batch_size, seq_len, dim = x.shape
+            x = rearrange(x, "...(l m) d -> ... l (m d)", m=self.factor)
+            return nn.Dense(dim)(x)
 
 
 class UpPool(nn.Module):
+    H: PatchARHyperparams
     factor: int
 
     @nn.compact
     def __call__(self, x):
-        x = nn.Conv(
-            x.shape[-1],
-            self.factor,
-            padding=self.factor - 1,
-            input_dilation=self.factor,
-            feature_group_count=x.shape[-1],
-        )(x)
-        # ensures causal relationship
+        if self.H.conv_pooling:
+            x = nn.Conv(
+                x.shape[-1],
+                self.factor,
+                padding=self.factor - 1,
+                input_dilation=self.factor,
+                feature_group_count=x.shape[-1],
+            )(x)
+        else:
+            batch_size, seq_len, dim = x.shape
+            x = nn.Dense(dim * self.factor)(x)
+            x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.factor)
+        # ensure causal
         x = lax.pad(
             x,
             0.0,
@@ -238,10 +252,12 @@ class SkipBlock(nn.Module):
             )
 
         z = DownPool(
+            self.H,
             self.pool_temporal,
         )(z)
         z = self.inner_layer(z, training)
         z = UpPool(
+            self.H,
             self.pool_temporal,
         )(z)
 
