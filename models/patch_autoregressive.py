@@ -245,9 +245,7 @@ class SkipBlock(nn.Module):
         z = x
 
         for _ in range(self.conv_blocks):
-            z = _conv_block(self.H.block_last_scale)(
-                z, training
-            )
+            z = _conv_block(self.H.block_last_scale)(z, training)
             z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
                 z, training
             )
@@ -279,9 +277,7 @@ class SkipBlock(nn.Module):
             )
 
         for _ in range(self.conv_blocks):
-            z = _conv_block(self.H.block_last_scale)(
-                z, training
-            )
+            z = _conv_block(self.H.block_last_scale)(z, training)
             z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
                 z, training
             )
