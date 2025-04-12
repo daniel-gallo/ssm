@@ -132,14 +132,14 @@ class ResBlock(nn.Module):
     last_scale: float = 1.0
 
     @nn.compact
-    def __call__(self, x, training=False):
+    def __call__(self, x, state=None, training=False):
         bs, seq_len, dim = x.shape
 
         z = nn.LayerNorm()(x) if self.H.use_norm else x
-        z = self.layer(z)
+        z, state = self.layer(z, state)
         z = nn.Dropout(self.H.dropout_rate, deterministic=not training)(z)
         z = z * self.last_scale
-        return x + z
+        return x + z, state
 
 
 class MLPBlock(nn.Module):
@@ -148,7 +148,7 @@ class MLPBlock(nn.Module):
     reduce: int = 1
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, state=None):
         bs, seq_len, dim = x.shape
         expand = self.expand or self.H.ff_expand
         z = nn.Dense(dim * expand)(x)
@@ -157,7 +157,7 @@ class MLPBlock(nn.Module):
             z = z * nn.gelu(gated_x)
         else:
             z = nn.gelu(z)
-        return nn.Dense(dim // self.reduce)(z)
+        return nn.Dense(dim // self.reduce)(z), None
 
 
 class TemporalMixingBlock(nn.Module):
@@ -165,51 +165,90 @@ class TemporalMixingBlock(nn.Module):
     d_out: int
 
     @nn.compact
-    def __call__(self, x, h_prev=None):
+    def __call__(self, x, state=None):
         recurrent_block = get_recurrent_block(self.H.rnn)
-        z = (
-            nn.LayerNorm()(
+        kernel_size = self.H.conv_kernel_size
+        state = state or self.default_state(x)
+        new_state = []
+        # z = (
+        #     nn.LayerNorm()(
+        #         nn.Conv(
+        #             self.d_out,
+        #             self.H.conv_kernel_size,
+        #             padding="CAUSAL",
+        #             feature_group_count=self.H.conv_feature_group_count,
+        #         )(x)
+        #     )
+        #     if self.H.use_temporal_cnn
+        #     else x
+        # )
+        if self.H.use_temporal_cnn:
+            z = jnp.concatenate([state.pop(0), x], axis=1)
+            z = nn.LayerNorm()(
                 nn.Conv(
                     self.d_out,
-                    self.H.conv_kernel_size,
-                    padding="CAUSAL",
+                    kernel_size,
+                    padding="VALID",
                     feature_group_count=self.H.conv_feature_group_count,
-                )(x)
+                )(z)
             )
-            if self.H.use_temporal_cnn
-            else x
-        )
-        z, _ = recurrent_block(
+            new_state.append(x[:, -(kernel_size - 1) :, :])
+        else:
+            z = x
+
+        z, h_prev = recurrent_block(
             self.H.rnn,
             d_hidden=self.H.rnn_hidden_size,
             d_out=self.d_out,
-        )(z)
+        )(z, state.pop())
+        new_state.append(h_prev)
+
         if self.H.use_gating:
             gated_x = nn.Dense(self.d_out)(x)
             x = z * nn.gelu(gated_x)
         else:
             x = nn.gelu(z)
-        return nn.Dense(self.d_out)(x)
+        return nn.Dense(self.d_out)(x), new_state
+
+    def default_state(self, x):
+        bs, seq_len, dim = x.shape
+        kernel_size = self.H.conv_kernel_size
+
+        state_rnn = jnp.zeros((bs, self.H.rnn.d_hidden))
+        if self.H.use_temporal_cnn:
+            state_cnn = jnp.zeros((bs, kernel_size - 1, dim))
+            return [state_cnn, state_rnn]
+        return [state_rnn]
 
 
 class ConvBlock(nn.Module):
     H: PatchARHyperparams
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, state=None):
         bs, seq_len, dim = x.shape
+        state = state or self.default_state(x)
+        kernel_size = self.H.conv_kernel_size
+
         z = nn.Conv(
             dim,
-            self.H.conv_kernel_size,
-            padding="CAUSAL",
+            kernel_size,
+            padding="VALID",
             feature_group_count=self.H.conv_feature_group_count,
-        )(x)
+        )(jnp.concatenate([state, x], axis=1))
+        state = x[:, -(kernel_size - 1) :, :]
+
         if self.H.use_gating:
             gated_x = nn.Dense(dim)(x)
             z = z * nn.gelu(gated_x)
         else:
             z = nn.gelu(z)
-        return nn.Dense(dim)(z)
+        return nn.Dense(dim)(z), state
+
+    def default_state(self, x):
+        bs, seq_len, dim = x.shape
+        kernel_size = self.H.conv_kernel_size
+        return jnp.zeros((bs, kernel_size - 1, dim))
 
 
 class SkipBlock(nn.Module):
@@ -220,7 +259,7 @@ class SkipBlock(nn.Module):
     pool_temporal: int = 1
 
     @nn.compact
-    def __call__(self, x, training=False):
+    def __call__(self, x, state=None, training=False):
         def _conv_block(last_scale=1.0):
             return ResBlock(
                 self.H,
@@ -242,55 +281,71 @@ class SkipBlock(nn.Module):
                 last_scale=last_scale,
             )
 
+        state, state_inner = state or self.default_state()
+        state = reversed(state)
+        new_state = []
+
         z = x
 
         for _ in range(self.conv_blocks):
-            z = _conv_block(self.H.block_last_scale)(z, training)
-            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
-                z, training
+            z, h_prev = _conv_block(self.H.block_last_scale)(
+                z, state.pop(), training
             )
+            z, _ = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, None, training
+            )
+            new_state.append(h_prev)
 
         for _ in range(self.temporal_blocks):
-            z = _temporal_block(z.shape[-1], self.H.block_last_scale)(
-                z, training
+            z, h_prev = _temporal_block(z.shape[-1], self.H.block_last_scale)(
+                z, state.pop(), training
             )
-            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
-                z, training
+            z, _ = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, None, training
             )
+            new_state.append(h_prev)
 
         z = DownPool(
             self.H,
             self.pool_temporal,
         )(z)
-        z = self.inner_layer(z, training)
+        z, state_inner = self.inner_layer(z, state_inner, training)
         z = UpPool(
             self.H,
             self.pool_temporal,
         )(z)
 
         for _ in range(self.temporal_blocks):
-            z = _temporal_block(z.shape[-1], self.H.block_last_scale)(
+            z, h_prev = _temporal_block(
+                z.shape[-1], state.pop(), self.H.block_last_scale
+            )(z, training)
+            z, _ = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
                 z, training
             )
-            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
-                z, training
-            )
+            new_state.append(h_prev)
 
         for _ in range(self.conv_blocks):
-            z = _conv_block(self.H.block_last_scale)(z, training)
-            z = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
-                z, training
+            z, h_prev = _conv_block(self.H.block_last_scale)(
+                z, state.pop(), training
             )
+            z, _ = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                z, None, training
+            )
+            new_state.append(h_prev)
 
         match self.H.skip_residual:
             case "add":
-                return x + z
+                return x + z, (new_state, state_inner)
             case "mean":
-                return (x + z) / 2
+                return (x + z) / 2, (new_state, state_inner)
             case "mlp":
                 return MLPBlock(self.H, expand=1, reduce=2)(
                     jnp.concatenate([x, z], axis=-1)
-                )
+                ), (new_state, state_inner)
+
+    def default_state(self):
+        state = [None] * (2 * (self.conv_blocks + self.temporal_blocks))
+        return state, None
 
 
 class TemporalStack(nn.Module):
@@ -298,7 +353,7 @@ class TemporalStack(nn.Module):
     temporal_blocks: int = 1
 
     @nn.compact
-    def __call__(self, x, training=False):
+    def __call__(self, x, state=None, training=False):
         def _temporal_block(d_out, last_scale=1.0):
             return ResBlock(
                 self.H,
@@ -313,15 +368,24 @@ class TemporalStack(nn.Module):
                 last_scale=last_scale,
             )
 
-        for _ in range(self.temporal_blocks):
-            x = _temporal_block(x.shape[-1], self.H.block_last_scale)(
-                x, training
-            )
-            x = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
-                x, training
-            )
+        state, state_inner = state or self.default_state()
+        state = reversed(state)
+        new_state = []
 
-        return x
+        for _ in range(self.temporal_blocks):
+            x, h_prev = _temporal_block(x.shape[-1], self.H.block_last_scale)(
+                x, state.pop(), training
+            )
+            x, _ = _mlp_block(self.H.ff_expand, self.H.block_last_scale)(
+                x, None, training
+            )
+            new_state.append(h_prev)
+
+        return x, new_state
+
+    def default_state(self):
+        state = [None] * (self.temporal_blocks)
+        return state
 
 
 class PatchARModel(nn.Module):
