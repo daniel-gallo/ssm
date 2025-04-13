@@ -78,9 +78,7 @@ class RGLRU(nn.Module):
 
         x = merged_to_complex(self.H, x)
         h_prev = (
-            self.merged_to_complex(self.H, h_prev)
-            if h_prev is not None
-            else None
+            merged_to_complex(self.H, h_prev) if h_prev is not None else None
         )
 
         x = gate_x * x
