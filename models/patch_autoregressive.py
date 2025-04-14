@@ -69,7 +69,7 @@ class PatchARHyperparams(Hyperparams):
     block_last_scale: float = 0.125
     dropout_rate: float = 0.2
 
-    conv_pooling: bool = True
+    conv_pooling: bool = False
 
     @property
     def model(self):
@@ -226,13 +226,14 @@ class ConvBlock(nn.Module):
         state = state if state is not None else self.default_state(x)
         kernel_size = self.H.conv_kernel_size
 
+        z = jnp.concatenate([state, x], axis=1)
+        state = z[:, -(kernel_size - 1) :, :]
         z = nn.Conv(
             dim,
             kernel_size,
             padding="VALID",
             feature_group_count=self.H.conv_feature_group_count,
-        )(jnp.concatenate([state, x], axis=1))
-        state = x[:, -(kernel_size - 1) :, :]
+        )(z)
 
         if self.H.use_gating:
             gated_x = nn.Dense(dim)(x)
@@ -469,7 +470,8 @@ class PatchARModel(nn.Module):
         )
 
     def sample_prior(self, gen_len, n_samples, rng):
-        segment_len = jnp.prod(jnp.array(self.H.pool_temporal))
+        # segment_len = jnp.prod(jnp.array(self.H.pool_temporal))
+        segment_len = gen_len
         assert gen_len % segment_len == 0
         num_segments = gen_len // segment_len
 
@@ -484,7 +486,7 @@ class PatchARModel(nn.Module):
 
             def fix_point(i, x):
                 segment, state, _ = x
-                prev_state = deepcopy(state)
+                prev_state = deepcopy(state)  # Possible inefficiency?
                 segment, state = self.evaluate(segment, state)
                 return (
                     random.categorical(loop_rng, segment, -1),
