@@ -9,6 +9,7 @@ from jax import lax, random
 
 from hps import Hyperparams
 from models.recurrence import RNNHyperparams, get_recurrent_block
+from nn import gelu
 
 
 def log_likelihood(logits, x):
@@ -154,9 +155,9 @@ class MLPBlock(nn.Module):
         z = nn.Dense(dim * expand)(x)
         if self.H.use_gating:
             gated_x = nn.Dense(dim * expand)(x)
-            z = z * nn.gelu(gated_x)
+            z = z * gelu(gated_x)
         else:
-            z = nn.gelu(z)
+            z = gelu(z)
         return nn.Dense(dim // self.reduce)(z)
 
 
@@ -186,9 +187,9 @@ class TemporalMixingBlock(nn.Module):
         )(z)
         if self.H.use_gating:
             gated_x = nn.Dense(self.d_out)(x)
-            x = z * nn.gelu(gated_x)
+            x = z * gelu(gated_x)
         else:
-            x = nn.gelu(z)
+            x = gelu(z)
         return nn.Dense(self.d_out)(x)
 
 
@@ -206,9 +207,9 @@ class ConvBlock(nn.Module):
         )(x)
         if self.H.use_gating:
             gated_x = nn.Dense(dim)(x)
-            z = z * nn.gelu(gated_x)
+            z = z * gelu(gated_x)
         else:
-            z = nn.gelu(z)
+            z = gelu(z)
         return nn.Dense(dim)(z)
 
 
