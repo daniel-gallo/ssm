@@ -1,6 +1,6 @@
 import dataclasses
 from copy import deepcopy
-from typing import Literal
+from typing import Literal, Tuple
 
 import flax.linen as nn
 import jax
@@ -51,9 +51,17 @@ class PatchARHyperparams(Hyperparams):
     rnn: RNNHyperparams = RNNHyperparams()
 
     # Model architecture
-    pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2)
-    conv_blocks: tuple[int, ...] = (4, 4, 4, 2, 2)
-    temporal_blocks: tuple[int, ...] = (0, 0, 0, 2, 2, 4)
+    pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2, 2)
+    model_structure: tuple[tuple[str, ...], ...] = (
+        ("conv", "conv", "conv", "conv"),
+        ("conv", "conv", "conv", "conv"),
+        ("conv", "conv", "conv", "conv"),
+        ("conv", "conv", "rglru", "rglru"),
+        ("conv", "conv", "rglru", "rglru"),
+        ("conv", "conv", "rglru", "rglru"),
+        ("rglru", "rglru", "rglru", "rglru"),
+    )
+    cls_head: tuple[str, ...] = ("conv", "conv", "mlp")
 
     use_norm: bool = True
     use_gating: bool = True
@@ -78,6 +86,30 @@ class PatchARHyperparams(Hyperparams):
     @property
     def sample_prior(self):
         return PatchARModel.sample_prior
+
+
+def get_block(type: str, H: PatchARHyperparams, last_scale=1.0, expand=1):
+    match type:
+        case "conv":
+            return ResBlock(
+                H,
+                layer=ConvBlock(H),
+                last_scale=last_scale,
+            )
+        case "rglru":
+            return ResBlock(
+                H,
+                layer=TemporalMixingBlock(H),
+                last_scale=last_scale,
+            )
+        case "mlp":
+            return ResBlock(
+                H,
+                layer=MLPBlock(H, expand=expand),
+                last_scale=last_scale,
+            )
+        case _:
+            raise ValueError(f"Unknown block type: {type}")
 
 
 class DownPool(nn.Module):
@@ -251,42 +283,19 @@ class ConvBlock(nn.Module):
 class SkipBlock(nn.Module):
     H: PatchARHyperparams
     inner_layer: nn.Module
-    conv_blocks: int = 0
-    temporal_blocks: int = 0
+    block_structure: Tuple[str] = tuple()
     pool_temporal: int = 1
 
     def setup(self):
-        def _conv_block(last_scale=1.0):
-            return ResBlock(
-                self.H,
-                layer=ConvBlock(self.H),
-                last_scale=last_scale,
-            )
-
-        def _mlp_block(expand=None, last_scale=1.0):
-            return ResBlock(
-                self.H,
-                layer=MLPBlock(self.H, expand=expand),
-                last_scale=last_scale,
-            )
-
-        def _temporal_block(last_scale=1.0):
-            return ResBlock(
-                self.H,
-                layer=TemporalMixingBlock(self.H),
-                last_scale=last_scale,
-            )
-
         down_blocks = []
-        for _ in range(self.conv_blocks):
-            down_blocks.append(_conv_block(self.H.block_last_scale))
+        for block_type in self.block_structure:
             down_blocks.append(
-                _mlp_block(self.H.ff_expand, self.H.block_last_scale)
+                get_block(block_type, self.H, self.H.block_last_scale)
             )
-        for _ in range(self.temporal_blocks):
-            down_blocks.append(_temporal_block(self.H.block_last_scale))
             down_blocks.append(
-                _mlp_block(self.H.ff_expand, self.H.block_last_scale)
+                get_block(
+                    "mlp", self.H, self.H.block_last_scale, self.H.ff_expand
+                )
             )
         self.down_blocks = down_blocks
 
@@ -300,15 +309,14 @@ class SkipBlock(nn.Module):
         )
 
         up_blocks = []
-        for _ in range(self.temporal_blocks):
-            up_blocks.append(_temporal_block(self.H.block_last_scale))
+        for block_type in reversed(self.block_structure):
             up_blocks.append(
-                _mlp_block(self.H.ff_expand, self.H.block_last_scale)
+                get_block(block_type, self.H, self.H.block_last_scale)
             )
-        for _ in range(self.conv_blocks):
-            up_blocks.append(_conv_block(self.H.block_last_scale))
             up_blocks.append(
-                _mlp_block(self.H.ff_expand, self.H.block_last_scale)
+                get_block(
+                    "mlp", self.H, self.H.block_last_scale, self.H.ff_expand
+                )
             )
         self.up_blocks = up_blocks
 
@@ -351,7 +359,7 @@ class SkipBlock(nn.Module):
 
 class TemporalStack(nn.Module):
     H: PatchARHyperparams
-    temporal_blocks: int = 1
+    block_structure: Tuple[str] = ("rglru",)
 
     def setup(self):
         def _temporal_block(last_scale=1.0):
@@ -369,9 +377,15 @@ class TemporalStack(nn.Module):
             )
 
         blocks = []
-        for _ in range(self.temporal_blocks):
-            blocks.append(_temporal_block(last_scale=1.0))
-            blocks.append(_mlp_block(self.H.ff_expand, self.H.block_last_scale))
+        for block_type in self.block_structure:
+            blocks.append(
+                get_block(block_type, self.H, self.H.block_last_scale)
+            )
+            blocks.append(
+                get_block(
+                    "mlp", self.H, self.H.block_last_scale, self.H.ff_expand
+                )
+            )
         self.blocks = blocks
 
     @nn.compact
@@ -385,6 +399,35 @@ class TemporalStack(nn.Module):
             new_state.append(h_prev)
 
         return x, new_state
+
+    def default_state(self, x):
+        state = [block.default_state(x) for block in self.blocks]
+        return state
+
+
+class CLSHead(nn.Module):
+    H: PatchARHyperparams
+
+    def setup(self):
+        blocks = []
+        for block in self.H.cls_head:
+            match self.H.cls_head:
+                case "conv":
+                    blocks.append(ConvBlock(self.H))
+                case "mlp":
+                    blocks.append(MLPBlock(self.H, expand=self.H.ff_expand))
+        self.blocks = blocks
+        self.final = nn.Dense(self.H.data_num_cats)
+
+    def __call__(self, x, state=None, training=False):
+        state = state if state is not None else self.default_state(x)
+        state.reverse()
+        new_state = []
+
+        for block in self.blocks:
+            x, h_prev = block(x, state.pop(), training)
+            new_state.append(h_prev)
+        return self.final(x), new_state
 
     def default_state(self, x):
         state = [block.default_state(x) for block in self.blocks]
@@ -406,31 +449,24 @@ class PatchARModel(nn.Module):
                     self.H.data_num_cats, self.H.base_dim
                 )
 
-        self.cls_mlp = nn.Sequential(
-            [
-                # ConvBlock(self.H),
-                # ConvBlock(self.H),
-                nn.Dense(self.H.data_num_cats),
-            ]
-        )
+        self.cls_head = CLSHead(self.H)
         self.norm = nn.LayerNorm()
 
-        block = TemporalStack(self.H, self.H.temporal_blocks[-1])
-        for p_temporal, conv_blocks, temp_blocks in zip(
+        block = TemporalStack(self.H, self.H.model_structure[-1])
+        for p_temporal, block_structure in zip(
             reversed(self.H.pool_temporal),
-            reversed(self.H.conv_blocks),
-            reversed(self.H.temporal_blocks[:-1]),
+            reversed(self.H.model_structure[:-1]),
         ):
             block = SkipBlock(
                 self.H,
                 block,
-                conv_blocks=conv_blocks,
-                temporal_blocks=temp_blocks,
+                block_structure=block_structure,
                 pool_temporal=p_temporal,
             )
         self.temporal_pyramid = block
 
     def evaluate(self, x, state=None, training=False):
+        state, cls_state = state if state is not None else self.default_state(x)
         batch_size, seq_len, _ = x.shape
         inp = x
 
@@ -454,15 +490,17 @@ class PatchARModel(nn.Module):
 
         x = self.norm(x)
 
+        x, cls_state = self.cls_head(x, cls_state)
+
         return jnp.reshape(
-            self.cls_mlp(x),
+            x,
             (
                 batch_size,
                 seq_len,
                 self.H.data_num_channels,
                 self.H.data_num_cats,
             ),
-        ), state
+        ), (state, cls_state)
 
     def __call__(self, x, rng=None, training=False):
         return loss_and_metrics(
@@ -484,7 +522,7 @@ class PatchARModel(nn.Module):
             result, state, rng = x
             loop_rng, rng = random.split(rng, 2)
 
-            def fix_point(i, x):
+            def fix_point(j, x):
                 segment, state, _ = x
                 prev_state = deepcopy(state)  # Possible inefficiency?
                 segment, state = self.evaluate(segment, state)
@@ -513,4 +551,7 @@ class PatchARModel(nn.Module):
         return result
 
     def default_state(self, x):
-        return self.temporal_pyramid.default_state(x)
+        return (
+            self.temporal_pyramid.default_state(x),
+            self.cls_head.default_state(x),
+        )
