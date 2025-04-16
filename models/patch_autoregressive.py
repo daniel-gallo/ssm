@@ -118,7 +118,8 @@ class DownPool(nn.Module):
     factor: int
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, state=None):
+        state = state if state is not None else self.default_state()
         if self.H.conv_pooling:
             return nn.Conv(
                 x.shape[-1],
@@ -126,11 +127,14 @@ class DownPool(nn.Module):
                 self.factor,
                 padding="VALID",
                 feature_group_count=x.shape[-1],
-            )(x)
+            )(x), None
         else:
             batch_size, seq_len, dim = x.shape
             x = rearrange(x, "...(l m) d -> ... l (m d)", m=self.factor)
-            return nn.Dense(dim)(x)
+            return nn.Dense(dim)(x), None
+
+    def default_state(self, x):
+        return None
 
 
 class UpPool(nn.Module):
@@ -138,7 +142,8 @@ class UpPool(nn.Module):
     factor: int
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, state=None):
+        state = state if state is not None else self.default_state(x)
         if self.H.conv_pooling:
             x = nn.Conv(
                 x.shape[-1],
@@ -152,12 +157,12 @@ class UpPool(nn.Module):
             x = nn.Dense(dim * self.factor)(x)
             x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.factor)
         # ensure causal
-        x = lax.pad(
-            x,
-            0.0,
-            ((0, 0, 0), (self.factor - 1, -(self.factor - 1), 0), (0, 0, 0)),
-        )
+        x = jnp.concatenate([state, x], axis=1)[: -(self.factor - 1)]
         return x
+
+    def default_state(self, x):
+        bs, seq_len, dim = x.shape
+        return jnp.zeros((bs, self.factor - 1, dim))
 
 
 class ResBlock(nn.Module):
@@ -335,9 +340,11 @@ class SkipBlock(nn.Module):
             z, h_prev = block(z, state.pop(), training)
             new_state.append(h_prev)
 
-        z = self.down_pool(z)
+        z, h_prev = self.down_pool(z, state.pop())
+        new_state.append(h_prev)
         z, state_inner = self.inner_layer(z, state_inner, training)
-        z = self.up_pool(z)
+        z, h_prev = self.up_pool(z, state.pop())
+        new_state.append(h_prev)
 
         for block in self.up_blocks:
             z, h_prev = block(z, state.pop(), training)
@@ -355,6 +362,10 @@ class SkipBlock(nn.Module):
 
     def default_state(self, x):
         state = [block.default_state(x) for block in self.down_blocks]
+        state += [
+            self.down_pool.default_state(x),
+            self.up_pool.default_state(x),
+        ]
         state += [block.default_state(x) for block in self.up_blocks]
         return state, self.inner_layer.default_state(x)
 
@@ -497,7 +508,7 @@ class PatchARModel(nn.Module):
 
     def sample_prior(self, gen_len, n_samples, rng):
         # segment_len = jnp.prod(jnp.array(self.H.pool_temporal))
-        segment_len = gen_len
+        segment_len = gen_len  # recovers original, slow sampling
         assert gen_len % segment_len == 0
         num_segments = gen_len // segment_len
 
