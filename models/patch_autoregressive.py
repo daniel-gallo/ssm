@@ -61,6 +61,7 @@ class PatchARHyperparams(Hyperparams):
         ("conv", "conv", "rglru", "rglru"),
         ("rglru", "rglru", "rglru", "rglru"),
     )
+    unet: bool = True
     cls_head: tuple[str, ...] = ("conv", "conv", "mlp")
 
     use_norm: bool = True
@@ -288,15 +289,16 @@ class SkipBlock(nn.Module):
 
     def setup(self):
         down_blocks = []
-        for block_type in self.block_structure:
-            down_blocks.append(
-                get_block(block_type, self.H, self.H.block_last_scale)
-            )
-            down_blocks.append(
-                get_block(
-                    "mlp", self.H, self.H.block_last_scale, self.H.ff_expand
+        if self.H.unet:
+            for block_type in self.block_structure:
+                down_blocks.append(
+                    get_block(block_type, self.H, self.H.block_last_scale)
                 )
-            )
+                down_blocks.append(
+                    get_block(
+                        "mlp", self.H, self.H.block_last_scale, self.H.ff_expand
+                    )
+                )
         self.down_blocks = down_blocks
 
         self.down_pool = DownPool(
@@ -362,20 +364,6 @@ class TemporalStack(nn.Module):
     block_structure: Tuple[str] = ("rglru",)
 
     def setup(self):
-        def _temporal_block(last_scale=1.0):
-            return ResBlock(
-                self.H,
-                layer=TemporalMixingBlock(self.H),
-                last_scale=last_scale,
-            )
-
-        def _mlp_block(expand=None, last_scale=1.0):
-            return ResBlock(
-                self.H,
-                layer=MLPBlock(self.H, expand=expand),
-                last_scale=last_scale,
-            )
-
         blocks = []
         for block_type in self.block_structure:
             blocks.append(
