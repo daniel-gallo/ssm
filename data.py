@@ -31,6 +31,8 @@ def load_data(H: Hyperparams):
             H, data = load_sc09_mp3(H)
         case "sc09-mp3-downsampled":
             H, data = load_sc09_mp3_downsampled(H)
+        case "sc09-mini":
+            H, data = load_sc09_mini(H)
         case "beethoven":
             H, data = load_beethoven(H)
         case "youtube_mix":
@@ -394,6 +396,88 @@ def load_sc09_mp3_downsampled(H):
 
     cache = np.load(cache_file)
     # The cache is stored as uint8, but I don't want to deal with overflows
+    train = cache["train"].astype(np.int16)
+    test = cache["test"].astype(np.int16)
+
+    # Add a dummy channel dim
+    train, test = train[..., np.newaxis], test[..., np.newaxis]
+
+    assert train.dtype == test.dtype == np.int16
+    assert train.shape == (data_num_training_samples, 8000, 1)
+    assert test.shape == (7750, 8000, 1)
+
+    np.random.RandomState(H.seed).shuffle(train)
+
+    return H, (train, test)
+
+
+def load_sc09_mini(H):
+    def mu_law_encode(x):
+        # Based on torchaudio.functional.mu_law_encoding
+        mu = 255
+        x = x / 2**15
+        x = np.sign(x) * np.log1p(mu * np.abs(x)) / np.log1p(mu)
+        return np.uint8((x + 1) / 2 * mu + 0.5)
+
+    data_num_training_samples = 31158
+    seq_len = 8_000
+    num_cats = 256
+    url = "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip"
+    base_dir = Path(H.data_dir) / "sc09-mini"
+    zip_file = base_dir / "sc09.zip"
+    unzipped_dir = base_dir / "sc09"
+    cache_file = base_dir / "cache.npz"
+    cache_url = "gs://ssm-datasets/sc09-mini.npz"
+
+    os.makedirs(base_dir, exist_ok=True)
+
+    H = dataclasses.replace(
+        H,
+        data_seq_length=seq_len,
+        data_num_channels=1,
+        data_num_cats=num_cats,
+        data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+        data_num_training_samples=data_num_training_samples,
+        data_framerate=8000,
+    )
+
+    if not cache_file.exists() and gfile.exists(cache_url):
+        logprint(H, "Loading sc09-mp3-downsampled from GCS")
+        gfile.copy(cache_url, cache_file)
+
+    if not cache_file.exists():
+        if not unzipped_dir.exists():
+            maybe_download(H, url, zip_file)
+            unzip(H, zip_file, base_dir)
+
+        testing_list = unzipped_dir / "testing_list.txt"
+        validation_list = unzipped_dir / "validation_list.txt"
+        test_tracks = set(
+            testing_list.read_text().splitlines()
+            + validation_list.read_text().splitlines()
+        )
+
+        train = []
+        test = []
+        logprint(H, "Reading SC09 wav files...")
+        tracks = list(base_dir.glob("**/*.wav"))
+        logprint(H, "Converting to mp3 and back to wav...")
+        with Pool(128) as P:
+            P.map(wav_to_mp3_to_wav, tracks)
+        for track in tracks:
+            if f"{track.parent.name}/{track.name}" in test_tracks:
+                test.append(wav_to_np(track))
+            else:
+                train.append(wav_to_np(track))
+
+        logprint(H, "Converting to NumPy array...")
+        train = mu_law_encode(pad(train, seq_len))
+        test = mu_law_encode(pad(test, seq_len))
+
+        np.savez(cache_file, train=train, test=test)
+
+    cache = np.load(cache_file)
+
     train = cache["train"].astype(np.int16)
     test = cache["test"].astype(np.int16)
 
