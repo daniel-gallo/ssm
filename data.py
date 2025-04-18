@@ -442,7 +442,7 @@ def load_sc09_mini(H):
     )
 
     if not cache_file.exists() and gfile.exists(cache_url):
-        logprint(H, "Loading sc09-mp3-downsampled from GCS")
+        logprint(H, "Loading sc09-mini from GCS")
         gfile.copy(cache_url, cache_file)
 
     if not cache_file.exists():
