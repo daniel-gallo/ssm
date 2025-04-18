@@ -623,6 +623,7 @@ def save_samples(H: Hyperparams, step, samples):
             "sc09"
             | "sc09-mp3"
             | "sc09-mp3-downsampled"
+            | "sc09-mini"
             | "beethoven"
             | "youtube_mix"
         ):
