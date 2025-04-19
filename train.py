@@ -26,6 +26,7 @@ from models import (
     S4Hyperparams,
     VSSMHyperparams,
 )
+from models.noname.noname import NoNameHyperparameters
 
 flax.config.update("flax_use_orbax_checkpointing", False)
 map = safe_map
@@ -257,6 +258,7 @@ def main():
             "patch-ar": PatchARHyperparams,
             "diffusion": DiffusionHyperparams,
             "haar": HaarHyperparams,
+            "noname": NoNameHyperparameters,
         },
         as_positional=False,
     )
