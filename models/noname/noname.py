@@ -25,14 +25,14 @@ class NoNameHyperparameters(Hyperparams):
     fsq_levels: Tuple[int, ...] = (8, 8, 8)
 
     # Autoregressive model
-    ar_model: Literal["transformer", "rnn"] = "transformer"
+    ar_model: Literal["transformer"] = "transformer"
     ar_d: int = 384
     ar_num_layers: int = 6
     ar_num_heads: int = 6
     temperature: float = 0.8
 
     # Output head
-    head: str = "l1"
+    head: Literal["continuous", "discrete"] = "continuous"
 
     @property
     def model(self):
@@ -45,9 +45,9 @@ class NoNameHyperparameters(Hyperparams):
 
 def get_head(name: str):
     match name:
-        case "l1":
+        case "continuous":
             return ContinuousHead
-        case "ce":
+        case "discrete":
             return DiscreteHead
         case _:
             raise ValueError
@@ -97,7 +97,7 @@ class NoName(nn.Module):
         z = self.encoder(self.get_encoder_input(x))
         z_hat = self.fsq.quantize(self.enc_to_fsq(z))
         reconstruction = self.decoder(self.fsq_to_dec(z_hat))
-        reconstruction_loss = self.head.loss(reconstruction, x)
+        metrics = self.head.loss(reconstruction, x)
 
         # Train AR model
         tokens = self.fsq.codes_to_indexes(z_hat)
@@ -105,14 +105,13 @@ class NoName(nn.Module):
         ar_loss = -log_likelihood(logits, tokens)
         token_utilization = self.get_token_utilization(tokens)
 
-        loss = reconstruction_loss + ar_loss
         metrics = {
-            "loss": loss,
-            "reconstruction_loss": reconstruction_loss,
+            **metrics,
+            "loss": metrics["loss"] + ar_loss,
             "ar_loss": ar_loss,
             "token_utilization": token_utilization,
         }
-        return loss, metrics
+        return metrics["loss"], metrics
 
     def sample_prior(self, gen_len, n_samples, rng):
         gen_len = gen_len // np.prod(self.H.strides)
