@@ -11,3 +11,4 @@ wandb
 ffmpeg-python
 tensorflow
 soundfile
+librosa
