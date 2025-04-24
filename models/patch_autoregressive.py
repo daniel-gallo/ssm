@@ -119,7 +119,6 @@ class DownPool(nn.Module):
 
     @nn.compact
     def __call__(self, x, state=None):
-        state = state if state is not None else self.default_state()
         if self.H.conv_pooling:
             return nn.Conv(
                 x.shape[-1],
@@ -157,12 +156,14 @@ class UpPool(nn.Module):
             x = nn.Dense(dim * self.factor)(x)
             x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.factor)
         # ensure causal
-        x = jnp.concatenate([state, x], axis=1)[: -(self.factor - 1)]
-        return x
+        seq_len = x.shape[1]
+        x = jnp.concatenate([state, x], axis=1)
+        x, state = jnp.split(x, [seq_len], axis=1)
+        return x, state
 
     def default_state(self, x):
-        bs, seq_len, dim = x.shape
-        return jnp.zeros((bs, self.factor - 1, dim))
+        bs, _, _ = x.shape
+        return jnp.zeros((bs, self.factor - 1, self.H.base_dim))
 
 
 class ResBlock(nn.Module):
@@ -507,8 +508,8 @@ class PatchARModel(nn.Module):
         )
 
     def sample_prior(self, gen_len, n_samples, rng):
-        # segment_len = jnp.prod(jnp.array(self.H.pool_temporal))
-        segment_len = gen_len  # recovers original, slow sampling
+        segment_len = jnp.prod(jnp.array(self.H.pool_temporal))
+        # segment_len = gen_len  # recovers original, slow sampling
         assert gen_len % segment_len == 0
         num_segments = gen_len // segment_len
 
