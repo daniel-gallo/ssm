@@ -141,6 +141,7 @@ def mu_law_encode(audio):
     # Based on implementation from S4 repo. Audio is assumed to have shape
     # (batch, length), i.e. single channel.
     def minmax_scale(x, range_min, range_max):
+        x = x.astype(np.float32)
         assert x.ndim == 2
         min_val = np.min(x, axis=1, keepdims=True)
         max_val = np.max(x, axis=1, keepdims=True)
