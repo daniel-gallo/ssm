@@ -12,3 +12,4 @@ ffmpeg-python
 tensorflow
 soundfile
 librosa
+huggingface_hub

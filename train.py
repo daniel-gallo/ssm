@@ -194,7 +194,7 @@ def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
     return metrics
 
 
-def eval(H: Hyperparams, S: TrainState, data):
+def eval(H: Hyperparams, S: TrainState, data: jax.Array, split_name: str):
     # TODO: don't skip last batch
     # We don't care too much about reproducibility here:
     rng = random.PRNGKey(int(time.time()))
@@ -203,7 +203,7 @@ def eval(H: Hyperparams, S: TrainState, data):
         rng, rng_iter = random.split(rng)
         batch = jax.device_put(batch, SHARDING_BATCH)
         metrics.append(eval_iter(H, S, rng_iter, batch))
-    return prepend_to_keys(accum_metrics(metrics), "eval/")
+    return prepend_to_keys(accum_metrics(metrics), f"{split_name}/")
 
 
 def generate_samples(H: Hyperparams, S: TrainState):
@@ -221,18 +221,18 @@ def generate_samples(H: Hyperparams, S: TrainState):
 
 
 def train(H: Hyperparams, S: TrainState, data):
-    data_train, data_test = data
-
     t_last_checkpoint = time.time()
     # In case we're resuming a run
-    start_epoch = get_epoch(S.step, H.batch_size, len(data_train))
+    start_epoch = get_epoch(S.step, H.batch_size, len(data.train))
     for e in range(start_epoch, H.num_epochs):
-        S = train_epoch(H, S, data_train)
+        S = train_epoch(H, S, data.train)
         if (time.time() - t_last_checkpoint) / 60 > H.mins_per_checkpoint:
             save_checkpoint(H, S)
             t_last_checkpoint = time.time()
         if not (e + 1) % H.epochs_per_eval:
-            log(H, S.step, eval(H, S, data_test))
+            log(H, S.step, eval(H, S, data.val, split_name="val"))
+        if not (e + 1) % H.epochs_per_test:
+            log(H, S.step, eval(H, S, data.test, split_name="test"))
 
         if H.num_samples_per_eval and (not (e + 1) % H.epochs_per_gen):
             generate_samples(H, S)
