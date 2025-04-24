@@ -36,11 +36,18 @@ SHARDING_BATCH = NamedSharding(_mesh, P("batch"))
 
 
 def reshape_batches(batch_size, data):
-    num_batches = len(data) // batch_size
-    return np.reshape(
-        data[: batch_size * num_batches],
-        (num_batches, batch_size) + data.shape[1:],
-    )
+    data_raw, data_lengths = data
+    num_batches = len(data_raw) // batch_size
+    reshape = lambda a: np.reshape(a[:num_batches * batch_size],
+                                   (num_batches, batch_size) + a.shape[1:])
+    return list(zip(reshape(data_raw), reshape(data_lengths)))
+
+
+def shuffle(rng, data):
+    data_raw, data_lengths = data
+    perm = random.permutation(rng, len(data_raw))
+    take_perm = lambda a: jnp.take(a, perm, 0, unique_indices=True)
+    return take_perm(data_raw), take_perm(data_lengths)
 
 
 @tree_util.register_dataclass
@@ -121,7 +128,8 @@ def load_train_state(H: Hyperparams):
     rng_init, rng_train = random.split(random.PRNGKey(H.seed))
     weights = H.model.init(
         rng_init,
-        jnp.zeros((H.batch_size,) + H.data_shape, "int32"),
+        (jnp.zeros((H.batch_size,) + H.data_shape, "int32"),
+         jnp.full((H.batch_size,), H.data_seq_length, "int32")),
         random.PRNGKey(0),
     )
 
@@ -175,7 +183,7 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
     if H.shuffle_before_epoch:
         rng, rng_shuffle = random.split(S.rng)
         S = dataclasses.replace(S, rng=rng)
-        data = random.permutation(rng_shuffle, data)
+        data = shuffle(rng_shuffle, data)
     for batch in reshape_batches(H.batch_size, data):
         batch = jax.device_put(batch, SHARDING_BATCH)
         S, metrics = train_iter(H, S, batch)
@@ -225,7 +233,7 @@ def train(H: Hyperparams, S: TrainState, data):
 
     t_last_checkpoint = time.time()
     # In case we're resuming a run
-    start_epoch = get_epoch(S.step, H.batch_size, len(data_train))
+    start_epoch = get_epoch(S.step, H.batch_size, H.data_num_training_samples)
     for e in range(start_epoch, H.num_epochs):
         S = train_epoch(H, S, data_train)
         if (time.time() - t_last_checkpoint) / 60 > H.mins_per_checkpoint:

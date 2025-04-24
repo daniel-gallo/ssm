@@ -96,11 +96,13 @@ def load_mnist_binarized(H: Hyperparams):
 
     # Add a dummy channel dim
     train, test = np.expand_dims(train, -1), np.expand_dims(test, -1)
+    train_lengths = jnp.full(60_000, 784)
+    test_lengths = jnp.full(10_000, 784)
 
     assert train.shape == (data_num_training_samples, 784, 1)
     assert test.shape == (10_000, 784, 1)
 
-    return H, (train, test)
+    return H, ((train, train_lengths), (test, test_lengths))
 
 
 def maybe_download(H, url: str, path: Path):
@@ -130,11 +132,13 @@ def np_to_wav(x: np.ndarray, path: Path, framerate):
         wav_file.writeframes(x.tobytes())
 
 
-def pad(xs: List[np.ndarray], seq_len: int) -> np.ndarray:
-    xs_padded = np.zeros((len(xs), seq_len), dtype=xs[0].dtype)
+def pad(xs: List[np.ndarray], max_seq_len: int) -> np.ndarray:
+    lengths = np.array([len(x) for x in xs])
+    assert np.all(lengths <= max_seq_len)
+    xs_padded = np.zeros((len(xs), max_seq_len), dtype=xs[0].dtype)
     for i, x in enumerate(xs):
         xs_padded[i, : len(x)] = x
-    return xs_padded
+    return xs_padded, lengths
 
 
 def mu_law_encode(audio):
@@ -227,15 +231,21 @@ def load_sc09(H):
             else:
                 train.append(wav_to_np(track))
 
-        train = mu_law_encode(pad(train, seq_len)).astype(np.uint8)
-        test = mu_law_encode(pad(test, seq_len)).astype(np.uint8)
+        train_data, train_lengths = pad(train, seq_len)
+        test_data, test_lengths = pad(test, seq_len)
 
-        np.savez(cache_file, train=train, test=test)
+        train = mu_law_encode(train_data).astype(np.uint8)
+        test = mu_law_encode(test_data).astype(np.uint8)
+
+        np.savez(cache_file, train=train, test=test,
+                 train_lengths=train_lengths, test_lengths=test_lengths)
 
     cache = np.load(cache_file)
     # The cache is stored as uint8, but I don't want to deal with overflows
     train = cache["train"].astype(np.int16)
+    train_lengths = cache["train_lengths"]
     test = cache["test"].astype(np.int16)
+    test_lengths = cache["test_lengths"]
 
     # Add a dummy channel dim
     train, test = train[..., np.newaxis], test[..., np.newaxis]
@@ -243,10 +253,13 @@ def load_sc09(H):
     assert train.dtype == test.dtype == np.int16
     assert train.shape == (data_num_training_samples, 16000, 1)
     assert test.shape == (7750, 16000, 1)
+    assert train_lengths.dtype == test_lengths.dtype == np.int64
+    assert train_lengths.shape == (data_num_training_samples,)
+    assert test_lengths.shape == (7750,)
 
     np.random.RandomState(H.seed).shuffle(train)
 
-    return H, (train, test)
+    return H, ((train, train_lengths), (test, test_lengths))
 
 
 def wav_to_mp3_to_wav(fname, outrate=8000):

@@ -12,12 +12,16 @@ from hps import Hyperparams
 from models.recurrence import RNNHyperparams, get_recurrent_block
 
 
-def log_likelihood(logits, x):
+def log_likelihood(H: Hyperparams, logits, x_raw, x_lengths):
     bat, seq, chan, cat = logits.shape
-    assert x.shape == (bat, seq, chan)
-    return jnp.sum(
-        jnp.take_along_axis(jax.nn.log_softmax(logits), x[..., None], -1)
-    )
+    assert x_raw.shape == (bat, seq, chan)
+    assert x_lengths.shape == (bat,)
+    mask = (
+        jnp.arange(seq, dtype=jnp.int32)[jnp.newaxis, :]
+        < x_lengths[:, jnp.newaxis]
+    )[..., jnp.newaxis, jnp.newaxis].astype(jnp.float32)
+    return jnp.sum(jax.nn.log_softmax(logits) * mask * nn.one_hot(x_raw,
+                                                                  H.data_num_cats))
 
 
 def fourier_features(x, d):
@@ -30,9 +34,10 @@ def fourier_features(x, d):
     return rearrange(embedding, "b t c f -> b t (c f)")
 
 
-def loss_and_metrics(logits, x):
-    normalizer = x.size * jnp.log(2)
-    ll = log_likelihood(logits, x) / normalizer
+def loss_and_metrics(H: Hyperparams, logits, x_raw, x_lengths):
+    _, _, chan = x_raw.shape
+    normalizer = chan * jnp.sum(x_lengths) * jnp.log(2)
+    ll = log_likelihood(H, logits, x_raw, x_lengths) / normalizer
     loss = -ll
     return loss, {
         "loss": loss,
@@ -491,8 +496,10 @@ class PatchARModel(nn.Module):
         ), (state, cls_state)
 
     def __call__(self, x, rng=None, training=False):
-        return loss_and_metrics(
-            self.evaluate(x, self.default_state(x), training)[0], x
+        x_raw, x_lengths = x
+        return loss_and_metrics(self.H,
+            self.evaluate(x_raw, self.default_state(x_raw), training)[0],
+            x_raw, x_lengths
         )
 
     def sample_prior(self, gen_len, n_samples, rng):
