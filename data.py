@@ -13,6 +13,7 @@ import ffmpeg
 import jax.numpy as jnp
 import numpy as np
 from huggingface_hub import hf_hub_download
+from jax.tree_util import register_dataclass
 from PIL import Image
 from scipy.io import wavfile
 from tensorflow.io import gfile
@@ -21,11 +22,19 @@ from hps import Hyperparams
 from log_util import logprint
 
 
+# Container for arrays which have been padded in the sequence axis
+@register_dataclass
+@dataclasses.dataclass(frozen=True)
+class PaddedArray:
+    raw: np.ndarray  # shape: (batch, seq, chan)
+    lengths: np.ndarray  # shape: (batch,)
+
+
 @dataclasses.dataclass(frozen=True)
 class Dataset:
-    train: np.ndarray
-    val: np.ndarray
-    test: np.ndarray
+    train: PaddedArray
+    val: PaddedArray
+    test: PaddedArray
 
 
 def load_data(H: Hyperparams):
@@ -112,11 +121,19 @@ def load_mnist_binarized(H: Hyperparams):
     val = val[:, :, np.newaxis]
     test = test[:, :, np.newaxis]
 
+    train_lengths = np.full(data_num_training_samples, 784, "int64")
+    val_lengths = np.full(10_000, 784, "int64")
+    test_lengths = np.full(10_000, 784, "int64")
+
     assert train.shape == (data_num_training_samples, 784, 1)
     assert val.shape == (10_000, 784, 1)
     assert test.shape == (10_000, 784, 1)
 
-    return H, Dataset(train, val, test)
+    return H, Dataset(
+        PaddedArray(train, train_lengths),
+        PaddedArray(val, val_lengths),
+        PaddedArray(test, test_lengths),
+    )
 
 
 def download_from_hf(repo_id: str, filename: str, local_dir: Path):
@@ -147,11 +164,13 @@ def np_to_wav(x: np.ndarray, path: Path, framerate):
         wav_file.writeframes(x.tobytes())
 
 
-def pad(xs: List[np.ndarray], seq_len: int) -> np.ndarray:
-    xs_padded = np.zeros((len(xs), seq_len), dtype=xs[0].dtype)
+def pad(xs: List[np.ndarray], max_seq_len: int) -> np.ndarray:
+    lengths = np.array([len(x) for x in xs])
+    assert np.all(lengths <= max_seq_len)
+    xs_padded = np.zeros((len(xs), max_seq_len), dtype=xs[0].dtype)
     for i, x in enumerate(xs):
         xs_padded[i, : len(x)] = x
-    return xs_padded
+    return xs_padded, lengths
 
 
 # Based on implementation from S4 repo. Audio is assumed to have shape
@@ -226,8 +245,11 @@ def load_audio(
 
     cache = np.load(local_cache)
     train = cache["train"]
+    train_lengths = cache["train_lengths"]
     val = cache["val"]
+    val_lengths = cache["val_lengths"]
     test = cache["test"]
+    test_lengths = cache["test_lengths"]
 
     if H.min_max_scaling:
         train = minmax_scale(train, -1, 1)
@@ -249,10 +271,16 @@ def load_audio(
 
     assert train.dtype == test.dtype == np.int16
     assert train.shape == (data_num_training_samples, seq_len, 1)
+    assert train_lengths.dtype == np.int64
+    assert train_lengths.shape == (data_num_training_samples,)
 
     np.random.RandomState(H.seed).shuffle(train)
 
-    return H, Dataset(train, val, test)
+    return H, Dataset(
+        PaddedArray(train, train_lengths),
+        PaddedArray(val, val_lengths),
+        PaddedArray(test, test_lengths),
+    )
 
 
 def load_sc09(H):
@@ -291,11 +319,19 @@ def load_sc09(H):
             else:
                 train.append(wav_to_np(track))
 
-        train = pad(train, seq_len)
-        val = pad(val, seq_len)
-        test = pad(test, seq_len)
+        train, train_lengths = pad(train, seq_len)
+        val, val_lengths = pad(val, seq_len)
+        test, test_lengths = pad(test, seq_len)
 
-        np.savez(local_cache, train=train, val=val, test=test)
+        np.savez(
+            local_cache,
+            train=train,
+            train_lengths=train_lengths,
+            val=val,
+            val_lengths=val_lengths,
+            test=test,
+            test_lengths=test_lengths,
+        )
 
     return load_audio(
         H,
