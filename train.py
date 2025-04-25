@@ -15,6 +15,7 @@ from jax.sharding import PartitionSpec as P
 from jsonargparse import auto_cli
 
 from data import Dataset, PaddedArray, load_data, save_samples
+import s4.src.dataloaders.audio as s4_audio_data
 from hps import Hyperparams
 from log_util import log, logprint, logtrain
 from models import (
@@ -35,25 +36,25 @@ SHARDING_REPLICATED = NamedSharding(_mesh, P())
 SHARDING_BATCH = NamedSharding(_mesh, P("batch"))
 
 
-def reshape_batches(batch_size, data: PaddedArray):
-    num_batches = len(data.raw) // batch_size
+#def reshape_batches(batch_size, data: PaddedArray):
+#    num_batches = len(data.raw) // batch_size
+#
+#    def reshape(a):
+#        return np.reshape(
+#            a[: num_batches * batch_size],
+#            (num_batches, batch_size) + a.shape[1:],
+#        )
+#
+#    return map(PaddedArray, reshape(data.raw), reshape(data.lengths))
 
-    def reshape(a):
-        return np.reshape(
-            a[: num_batches * batch_size],
-            (num_batches, batch_size) + a.shape[1:],
-        )
 
-    return map(PaddedArray, reshape(data.raw), reshape(data.lengths))
-
-
-def shuffle(rng, data: PaddedArray):
-    perm = random.permutation(rng, len(data.raw))
-
-    def take_perm(a):
-        return jnp.take(a, perm, 0, unique_indices=True)
-
-    return PaddedArray(take_perm(data.raw), take_perm(data.lengths))
+#def shuffle(rng, data: PaddedArray):
+#    perm = random.permutation(rng, len(data.raw))
+#
+#    def take_perm(a):
+#        return jnp.take(a, perm, 0, unique_indices=True)
+#
+#    return PaddedArray(take_perm(data.raw), take_perm(data.lengths))
 
 
 @tree_util.register_dataclass
@@ -187,8 +188,11 @@ def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
     )
 
 
-def train_epoch(H: Hyperparams, S: TrainState, data: PaddedArray):
-    for batch in reshape_batches(H.batch_size, data):
+def train_epoch(H: Hyperparams, S: TrainState, data:
+                s4_audio_data.SpeechCommands09Autoregressive):
+    for batch in data.train_dataloader(batch_size=H.batch_size, drop_last=True):
+        _, batch_raw, batch_lengths = batch
+        batch = PaddedArray(batch_raw.numpy(), batch_lengths['lengths'].numpy())
         batch = jax.device_put(batch, SHARDING_BATCH)
         S, metrics = train_iter(H, S, batch)
         metrics = prepend_to_keys(metrics, "train/")
@@ -206,13 +210,15 @@ def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch: PaddedArray):
     return metrics
 
 
-def eval(H: Hyperparams, S: TrainState, data: PaddedArray, split_name: str):
+def eval(H: Hyperparams, S: TrainState, dataloader, split_name: str):
     # TODO: don't skip last batch
     # We don't care too much about reproducibility here:
     rng = random.PRNGKey(int(time.time()))
     metrics = []
-    for batch in reshape_batches(H.batch_size_eval, data):
+    for batch in dataloader(batch_size=H.batch_size_eval, drop_last=True):
         rng, rng_iter = random.split(rng)
+        _, batch_raw, batch_lengths = batch
+        batch = PaddedArray(batch_raw.numpy(), batch_lengths['lengths'].numpy())
         batch = jax.device_put(batch, SHARDING_BATCH)
         metrics.append(eval_iter(H, S, rng_iter, batch))
     return prepend_to_keys(accum_metrics(metrics), f"{split_name}/")
@@ -232,24 +238,20 @@ def generate_samples(H: Hyperparams, S: TrainState):
     )
 
 
-def train(H: Hyperparams, S: TrainState, data: Dataset):
+def train(H: Hyperparams, S: TrainState, data:
+          s4_audio_data.SpeechCommands09Autoregressive):
     t_last_checkpoint = time.time()
     # In case we're resuming a run
     start_epoch = get_epoch(S.step, H.batch_size, H.data_num_training_samples)
     for e in range(start_epoch, H.num_epochs):
-        data_train = data.train
-        if H.shuffle_before_epoch or e == 0:
-            rng, rng_shuffle = random.split(S.rng)
-            S = dataclasses.replace(S, rng=rng)
-            data_train = shuffle(rng_shuffle, data_train)
-        S = train_epoch(H, S, data_train)
+        S = train_epoch(H, S, data)
         if (time.time() - t_last_checkpoint) / 60 > H.mins_per_checkpoint:
             save_checkpoint(H, S)
             t_last_checkpoint = time.time()
         if not (e + 1) % H.epochs_per_eval:
-            log(H, S.step, eval(H, S, data.val, split_name="val"))
+            log(H, S.step, eval(H, S, data.val_dataloader, split_name="val"))
         if not (e + 1) % H.epochs_per_test:
-            log(H, S.step, eval(H, S, data.test, split_name="test"))
+            log(H, S.step, eval(H, S, data.test_dataloader, split_name="test"))
 
         if H.num_samples_per_eval and (not (e + 1) % H.epochs_per_gen):
             generate_samples(H, S)
@@ -281,7 +283,18 @@ def main():
     )
     log_configuration(H)
     logprint(H, "Loading data")
-    H, data = load_data(H)
+    #H, data = load_data(H)
+    H = dataclasses.replace(
+        H,
+        data_seq_length=16_000,
+        data_num_channels=1,
+        data_num_cats=256,
+        data_preprocess_fn=lambda x: (2.0 * x / 256) - 1,
+        data_num_training_samples=31158,
+        data_framerate=16_000,
+    )
+    data = s4_audio_data.SpeechCommands09Autoregressive('sc09')
+    data.setup()
     logprint(H, "Loading train state")
     S = load_train_state(H)
     if S.step == 0:

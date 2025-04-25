@@ -13,3 +13,5 @@ tensorflow
 soundfile
 librosa
 huggingface_hub
+torchaudio
+hydra-core
