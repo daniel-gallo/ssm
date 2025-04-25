@@ -12,7 +12,6 @@ from flax.training import checkpoints
 from jax import random, tree, tree_util
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
-from util import safe_map
 from jsonargparse import auto_cli
 
 from data import load_data, save_samples
@@ -27,6 +26,7 @@ from models import (
     VSSMHyperparams,
 )
 from models.noname.noname import NoNameHyperparameters
+from util import safe_map
 
 flax.config.update("flax_use_orbax_checkpointing", False)
 map = safe_map
