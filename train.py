@@ -12,7 +12,7 @@ from flax.training import checkpoints
 from jax import random, tree, tree_util
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
-from jax.util import safe_map
+from util import safe_map
 from jsonargparse import auto_cli
 
 from data import load_data, save_samples
