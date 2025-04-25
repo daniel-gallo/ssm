@@ -263,7 +263,6 @@ def load_sc09(H):
     num_cats = 256
     data_num_training_samples = 31_158
     data_framerate = 16_000
-    url = "https://huggingface.co/datasets/krandiash/sc09/resolve/main/sc09.zip"
     base_dir = Path(H.data_dir) / "sc09"
     zip_file = base_dir / "sc09.zip"
     unzipped_dir = base_dir / "sc09"
