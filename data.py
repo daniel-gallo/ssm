@@ -396,11 +396,19 @@ def load_sc09_mp3(H):
             else:
                 train.append(wav_to_np(track))
 
-        train = pad(train, seq_len)
-        val = pad(val, seq_len)
-        test = pad(test, seq_len)
+        train, train_lengths = pad(train, seq_len)
+        val, val_lengths = pad(val, seq_len)
+        test, test_lengths = pad(test, seq_len)
 
-        np.savez(local_cache, train=train, val=val, test=test)
+        np.savez(
+            local_cache,
+            train=train,
+            train_lengths=train_lengths,
+            val=val,
+            val_lengths=val_lengths,
+            test=test,
+            test_lengths=test_lengths,
+        )
 
     return load_audio(
         H,
@@ -454,11 +462,19 @@ def load_sc09_mp3_downsampled(H):
             else:
                 train.append(wav_to_np(track))
 
-        train = pad(train, seq_len)
-        val = pad(val, seq_len)
-        test = pad(test, seq_len)
+        train, train_lengths = pad(train, seq_len)
+        val, val_lengths = pad(val, seq_len)
+        test, test_lengths = pad(test, seq_len)
 
-        np.savez(local_cache, train=train, val=val, test=test)
+        np.savez(
+            local_cache,
+            train=train,
+            train_lengths=train_lengths,
+            val=val,
+            val_lengths=val_lengths,
+            test=test,
+            test_lengths=test_lengths,
+        )
 
     return load_audio(
         H,
@@ -500,11 +516,19 @@ def load_beethoven(H):
         for i in range(4068, 4328):
             test.append(wav_to_np(unzipped_dir / f"{i}.wav"))
 
-        train = pad(train, seq_len)
-        val = pad(val, seq_len)
-        test = pad(test, seq_len)
+        train, train_lengths = pad(train, seq_len)
+        val, val_lengths = pad(val, seq_len)
+        test, test_lengths = pad(test, seq_len)
 
-        np.savez(local_cache, train=train, val=val, test=test)
+        np.savez(
+            local_cache,
+            train=train,
+            train_lengths=train_lengths,
+            val=val,
+            val_lengths=val_lengths,
+            test=test,
+            test_lengths=test_lengths,
+        )
 
     return load_audio(
         H,
@@ -549,11 +573,19 @@ def load_youtube_mix(H):
             idx = str(i).zfill(3)
             test.append(wav_to_np(unzipped_dir / f"out{idx}.wav"))
 
-        train = pad(train, seq_len)
-        val = pad(val, seq_len)
-        test = pad(test, seq_len)
+        train, train_lengths = pad(train, seq_len)
+        val, val_lengths = pad(val, seq_len)
+        test, test_lengths = pad(test, seq_len)
 
-        np.savez(local_cache, train=train, val=val, test=test)
+        np.savez(
+            local_cache,
+            train=train,
+            train_lengths=train_lengths,
+            val=val,
+            val_lengths=val_lengths,
+            test=test,
+            test_lengths=test_lengths,
+        )
 
     return load_audio(
         H,
