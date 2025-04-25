@@ -10,11 +10,9 @@ from typing import List
 from urllib.request import urlretrieve
 
 import ffmpeg
-import jax
 import jax.numpy as jnp
 import numpy as np
 from huggingface_hub import hf_hub_download
-from jax import tree_util
 from PIL import Image
 from scipy.io import wavfile
 from tensorflow.io import gfile
@@ -23,12 +21,11 @@ from hps import Hyperparams
 from log_util import logprint
 
 
-@tree_util.register_dataclass
 @dataclasses.dataclass(frozen=True)
 class Dataset:
-    train: jax.Array
-    val: jax.Array
-    test: jax.Array
+    train: np.ndarray
+    val: np.ndarray
+    test: np.ndarray
 
 
 def load_data(H: Hyperparams):
