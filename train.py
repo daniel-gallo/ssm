@@ -14,7 +14,7 @@ from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from jsonargparse import auto_cli
 
-from data import PaddedArray, load_data, save_samples
+from data import Dataset, PaddedArray, load_data, save_samples
 from hps import Hyperparams
 from log_util import log, logprint, logtrain
 from models import (
@@ -149,7 +149,7 @@ def load_train_state(H: Hyperparams):
 
 
 @partial(jax.jit, static_argnums=0)
-def train_iter(H: Hyperparams, S: TrainState, batch):
+def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
     rng, rng_iter, rng_dropout = random.split(S.rng, 3)
 
     def lossfun(weights):
@@ -198,7 +198,7 @@ def train_epoch(H: Hyperparams, S: TrainState, data: PaddedArray):
 
 
 @partial(jax.jit, static_argnums=0)
-def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
+def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch: PaddedArray):
     # TODO: use JAX rng instead of FLAX (temporary fix for the S4 code)
     _, metrics = H.model.apply(
         S.weights_ema, batch, rng_iter, rngs={"dropout": rng_iter}
@@ -206,7 +206,7 @@ def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
     return metrics
 
 
-def eval(H: Hyperparams, S: TrainState, data: jax.Array, split_name: str):
+def eval(H: Hyperparams, S: TrainState, data: PaddedArray, split_name: str):
     # TODO: don't skip last batch
     # We don't care too much about reproducibility here:
     rng = random.PRNGKey(int(time.time()))
@@ -232,7 +232,7 @@ def generate_samples(H: Hyperparams, S: TrainState):
     )
 
 
-def train(H: Hyperparams, S: TrainState, data):
+def train(H: Hyperparams, S: TrainState, data: Dataset):
     t_last_checkpoint = time.time()
     # In case we're resuming a run
     start_epoch = get_epoch(S.step, H.batch_size, H.data_num_training_samples)
