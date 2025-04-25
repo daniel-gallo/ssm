@@ -499,7 +499,9 @@ class PatchARModel(nn.Module):
 
     def __call__(self, x: PaddedArray, rng=None, training=False):
         return loss_and_metrics(
-            self.H, self.evaluate(x.raw, self.default_state(x.raw), training)[0], x
+            self.H,
+            self.evaluate(x.raw, self.default_state(x.raw), training)[0],
+            x,
         )
 
     def sample_prior(self, gen_len, n_samples, rng):
