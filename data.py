@@ -274,8 +274,6 @@ def load_audio(
     assert train_lengths.dtype == np.int64
     assert train_lengths.shape == (data_num_training_samples,)
 
-    np.random.RandomState(H.seed).shuffle(train)
-
     return H, Dataset(
         PaddedArray(train, train_lengths),
         PaddedArray(val, val_lengths),

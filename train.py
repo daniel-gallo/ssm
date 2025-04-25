@@ -188,10 +188,6 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
 
 
 def train_epoch(H: Hyperparams, S: TrainState, data: PaddedArray):
-    if H.shuffle_before_epoch:
-        rng, rng_shuffle = random.split(S.rng)
-        S = dataclasses.replace(S, rng=rng)
-        data = shuffle(rng_shuffle, data)
     for batch in reshape_batches(H.batch_size, data):
         batch = jax.device_put(batch, SHARDING_BATCH)
         S, metrics = train_iter(H, S, batch)
@@ -241,7 +237,12 @@ def train(H: Hyperparams, S: TrainState, data):
     # In case we're resuming a run
     start_epoch = get_epoch(S.step, H.batch_size, H.data_num_training_samples)
     for e in range(start_epoch, H.num_epochs):
-        S = train_epoch(H, S, data.train)
+        data_train = data.train
+        if H.shuffle_before_epoch or e == 0:
+            rng, rng_shuffle = random.split(S.rng)
+            S = dataclasses.replace(S, rng=rng)
+            data_train = shuffle(rng_shuffle, data_train)
+        S = train_epoch(H, S, data_train)
         if (time.time() - t_last_checkpoint) / 60 > H.mins_per_checkpoint:
             save_checkpoint(H, S)
             t_last_checkpoint = time.time()
