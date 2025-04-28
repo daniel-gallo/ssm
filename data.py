@@ -17,6 +17,8 @@ from jax.tree_util import register_dataclass
 from PIL import Image
 from scipy.io import wavfile
 from tensorflow.io import gfile
+from scipy.fft import fft, fftfreq
+import matplotlib.pyplot as plt
 
 from hps import Hyperparams
 from log_util import logprint
@@ -252,6 +254,18 @@ def load_audio(
     val_lengths = cache["val_lengths"]
     test = cache["test"]
     test_lengths = cache["test_lengths"]
+
+    if hasattr(H, rnn) and H.rnn.init_use_spectrum:
+        train_full_length = train[train_lengths == seq_len]
+        spectrum = np.mean(np.log(np.abs(fft(train_full_length)[:, :seq_len // 2])),
+                    0)
+        H = dataclasses.replace(
+            H,
+            rnn=dataclasses.replace(
+                H.rnn,
+                data_spectrum=spectrum,
+            )
+        )
 
     if H.min_max_scaling:
         train = minmax_scale(train, -1, 1)
@@ -657,3 +671,37 @@ def save_audio(H: Hyperparams, step, samples):
         import wandb
 
         wandb.log({"samples": [wandb.Audio(f) for f in sample_filenames]}, step)
+
+
+def plot_sc09_spectrum(H: Hyperparams, filename):
+    data_dir = Path(H.data_dir)
+    base_dir = data_dir / "sc09"
+    zip_file = base_dir / "sc09.zip"
+    unzipped_dir = base_dir / "sc09"
+
+    if not base_dir.exists():
+        base_dir.mkdir(parents=True, exist_ok=True)
+        download_from_hf("krandiash/sc09", "sc09.zip", base_dir)
+        unzip(H, zip_file, base_dir)
+
+    testing_list = unzipped_dir / "testing_list.txt"
+    validation_list = unzipped_dir / "validation_list.txt"
+    test_tracks = set(
+        testing_list.read_text().splitlines()
+        + validation_list.read_text().splitlines()
+    )
+
+    train = []
+    for track in base_dir.glob("**/*.wav"):
+        if f"{track.parent.name}/{track.name}" not in test_tracks:
+            train.append(wav_to_np(track))
+
+    f = np.array([fft(t) for t in train if t.shape == (16000,)])
+
+    N = 16000
+    # sample spacing
+    T = 1 / 16000
+    x = np.linspace(0.0, N*T, N, endpoint=False)
+    xf = fftfreq(N, T)[:N//2]
+    plt.plot(xf[:N//2], np.mean(np.log(2.0/N * np.abs(f[:, :N//2])), 0), '-b')
+    plt.savefig(filename)

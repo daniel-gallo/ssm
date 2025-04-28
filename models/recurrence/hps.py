@@ -1,5 +1,5 @@
 import dataclasses
-from typing import Literal
+from typing import Literal, Optional, Any
 
 
 @dataclasses.dataclass(frozen=True)
@@ -19,3 +19,5 @@ class RNNHyperparams:
     init_minval_real: float = 0.9
     init_maxval_real: float = 0.99
     init_maxval_imag: float = 0.1
+    init_use_spectrum: bool = False
+    data_spectrum: Optional[Any] = None
