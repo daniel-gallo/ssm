@@ -519,10 +519,10 @@ class PatchARModel(nn.Module):
         return loss_and_metrics(
             self.H,
             self.evaluate(
-              x.raw,
-              self.default_state(x.raw),
-              self.default_inp_state(x.raw),
-              training
+                x.raw,
+                self.default_state(x.raw),
+                self.default_inp_state(x.raw),
+                training,
             )[0],
             x,
         )
