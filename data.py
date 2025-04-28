@@ -65,6 +65,7 @@ def load_mnist_binarized(H: Hyperparams):
         data_num_channels=1,
         data_num_cats=2,
         data_preprocess_fn=lambda x: 2.0 * x - 1,
+        data_baseline=0,
         data_num_training_samples=data_num_training_samples,
     )
 
@@ -232,6 +233,7 @@ def load_audio(
         data_num_channels=1,
         data_num_cats=num_cats,
         data_preprocess_fn=lambda x: (2.0 * x / num_cats) - 1,
+        data_baseline=num_cats // 2,
         data_num_training_samples=data_num_training_samples,
         data_framerate=data_framerate,
     )
