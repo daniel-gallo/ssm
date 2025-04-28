@@ -12,10 +12,9 @@ from flax.training import checkpoints
 from jax import random, tree, tree_util
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
-from jax.util import safe_map
 from jsonargparse import auto_cli
 
-from data import load_data, save_samples
+from data import Dataset, PaddedArray, load_data, save_samples
 from hps import Hyperparams
 from log_util import log, logprint, logtrain
 from models import (
@@ -27,6 +26,7 @@ from models import (
     VSSMHyperparams,
 )
 from models.noname.noname import NoNameHyperparameters
+from util import safe_map
 
 flax.config.update("flax_use_orbax_checkpointing", False)
 map = safe_map
@@ -35,12 +35,25 @@ SHARDING_REPLICATED = NamedSharding(_mesh, P())
 SHARDING_BATCH = NamedSharding(_mesh, P("batch"))
 
 
-def reshape_batches(batch_size, data):
-    num_batches = len(data) // batch_size
-    return np.reshape(
-        data[: batch_size * num_batches],
-        (num_batches, batch_size) + data.shape[1:],
-    )
+def reshape_batches(batch_size, data: PaddedArray):
+    num_batches = len(data.raw) // batch_size
+
+    def reshape(a):
+        return np.reshape(
+            a[: num_batches * batch_size],
+            (num_batches, batch_size) + a.shape[1:],
+        )
+
+    return map(PaddedArray, reshape(data.raw), reshape(data.lengths))
+
+
+def shuffle(rng, data: PaddedArray):
+    perm = random.permutation(rng, len(data.raw))
+
+    def take_perm(a):
+        return jnp.take(a, perm, 0, unique_indices=True)
+
+    return PaddedArray(take_perm(data.raw), take_perm(data.lengths))
 
 
 @tree_util.register_dataclass
@@ -121,7 +134,10 @@ def load_train_state(H: Hyperparams):
     rng_init, rng_train = random.split(random.PRNGKey(H.seed))
     weights = H.model.init(
         rng_init,
-        jnp.zeros((H.batch_size,) + H.data_shape, "int32"),
+        PaddedArray(
+            jnp.zeros((H.batch_size,) + H.data_shape, "int32"),
+            jnp.zeros((H.batch_size,), "int32"),
+        ),
         random.PRNGKey(0),
     )
 
@@ -133,7 +149,7 @@ def load_train_state(H: Hyperparams):
 
 
 @partial(jax.jit, static_argnums=0)
-def train_iter(H: Hyperparams, S: TrainState, batch):
+def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
     rng, rng_iter, rng_dropout = random.split(S.rng, 3)
 
     def lossfun(weights):
@@ -171,11 +187,7 @@ def train_iter(H: Hyperparams, S: TrainState, batch):
     )
 
 
-def train_epoch(H: Hyperparams, S: TrainState, data):
-    if H.shuffle_before_epoch:
-        rng, rng_shuffle = random.split(S.rng)
-        S = dataclasses.replace(S, rng=rng)
-        data = random.permutation(rng_shuffle, data)
+def train_epoch(H: Hyperparams, S: TrainState, data: PaddedArray):
     for batch in reshape_batches(H.batch_size, data):
         batch = jax.device_put(batch, SHARDING_BATCH)
         S, metrics = train_iter(H, S, batch)
@@ -186,7 +198,7 @@ def train_epoch(H: Hyperparams, S: TrainState, data):
 
 
 @partial(jax.jit, static_argnums=0)
-def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
+def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch: PaddedArray):
     # TODO: use JAX rng instead of FLAX (temporary fix for the S4 code)
     _, metrics = H.model.apply(
         S.weights_ema, batch, rng_iter, rngs={"dropout": rng_iter}
@@ -194,7 +206,7 @@ def eval_iter(H: Hyperparams, S: TrainState, rng_iter, batch):
     return metrics
 
 
-def eval(H: Hyperparams, S: TrainState, data):
+def eval(H: Hyperparams, S: TrainState, data: PaddedArray, split_name: str):
     # TODO: don't skip last batch
     # We don't care too much about reproducibility here:
     rng = random.PRNGKey(int(time.time()))
@@ -203,7 +215,7 @@ def eval(H: Hyperparams, S: TrainState, data):
         rng, rng_iter = random.split(rng)
         batch = jax.device_put(batch, SHARDING_BATCH)
         metrics.append(eval_iter(H, S, rng_iter, batch))
-    return prepend_to_keys(accum_metrics(metrics), "eval/")
+    return prepend_to_keys(accum_metrics(metrics), f"{split_name}/")
 
 
 def generate_samples(H: Hyperparams, S: TrainState):
@@ -220,19 +232,24 @@ def generate_samples(H: Hyperparams, S: TrainState):
     )
 
 
-def train(H: Hyperparams, S: TrainState, data):
-    data_train, data_test = data
-
+def train(H: Hyperparams, S: TrainState, data: Dataset):
     t_last_checkpoint = time.time()
     # In case we're resuming a run
-    start_epoch = get_epoch(S.step, H.batch_size, len(data_train))
+    start_epoch = get_epoch(S.step, H.batch_size, H.data_num_training_samples)
     for e in range(start_epoch, H.num_epochs):
+        data_train = data.train
+        if H.shuffle_before_epoch or e == 0:
+            rng, rng_shuffle = random.split(S.rng)
+            S = dataclasses.replace(S, rng=rng)
+            data_train = shuffle(rng_shuffle, data_train)
         S = train_epoch(H, S, data_train)
         if (time.time() - t_last_checkpoint) / 60 > H.mins_per_checkpoint:
             save_checkpoint(H, S)
             t_last_checkpoint = time.time()
         if not (e + 1) % H.epochs_per_eval:
-            log(H, S.step, eval(H, S, data_test))
+            log(H, S.step, eval(H, S, data.val, split_name="val"))
+        if not (e + 1) % H.epochs_per_test:
+            log(H, S.step, eval(H, S, data.test, split_name="test"))
 
         if H.num_samples_per_eval and (not (e + 1) % H.epochs_per_gen):
             generate_samples(H, S)

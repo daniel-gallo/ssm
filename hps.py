@@ -33,6 +33,7 @@ class Hyperparams:
     enable_wandb: bool = True
     steps_per_print: int = 1000
     epochs_per_eval: int = 1
+    epochs_per_test: int = 1
     mins_per_checkpoint: float = 10
     epochs_per_gen: int = 50
     num_samples_per_eval: int = 8
@@ -41,6 +42,7 @@ class Hyperparams:
 
     # Dataset
     dataset: str = "binarized-mnist"
+    min_max_scaling: bool = False
     # Other useful meta-data, set automatically during data loading
     data_seq_length: Optional[int] = None
     data_num_channels: Optional[int] = None
