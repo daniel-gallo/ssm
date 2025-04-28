@@ -23,6 +23,7 @@ class RGLRU(nn.Module):
     d_hidden: int
     d_out: int
     reverse: bool = False
+    freq_multiplier: float = 1.
 
     @nn.compact
     def __call__(self, x, h_prev=None, pos_emb=None):
@@ -38,13 +39,25 @@ class RGLRU(nn.Module):
 
         def stable_init_imag(rng, shape):
             u = jax.random.uniform(rng, shape=shape)
-            return jnp.pi * self.H.init_maxval_imag * u
+            return jnp.pi * self.H.init_maxval_imag * u / self.freq_multiplier
+
+        def spectrum_init_imag(rng, shape):
+            if self.H.data_spectrum is None:
+                return jnp.zeros(shape)
+            c = jax.random.categorical(rng, self.H.data_spectrum, shape=shape)
+            return jnp.pi * c / (len(self.H.data_spectrum) * self.freq_multiplier)
 
         a_real_param = self.param("a_real_param", stable_init_real, (d_hidden,))
         if not self.H.only_real:
-            a_imag_param = self.param(
-                "a_imag_param", stable_init_imag, (d_hidden,)
-            )
+            if self.H.init_use_spectrum:
+                a_imag_param = self.param(
+                    "a_imag_param", spectrum_init_imag, (d_hidden,)
+                )
+                #import pudb; pu.db
+            else:
+                a_imag_param = self.param(
+                    "a_imag_param", stable_init_imag, (d_hidden,)
+                )
 
         if self.H.pos_embedding:
             if pos_emb is None:
@@ -71,7 +84,7 @@ class RGLRU(nn.Module):
         if self.H.only_real:
             a, a_squared = complex_lib.exp(log_a), complex_lib.exp(2 * log_a)
         else:
-            log_a_imag = a_imag_param * gate_a
+            log_a_imag = a_imag_param * jnp.ones_like(gate_a)
             log_a_complex = real_imag_complex(self.H, log_a, log_a_imag)
             a = complex_lib.exp(log_a_complex)
             a_squared = complex_lib.abs_squared(a)

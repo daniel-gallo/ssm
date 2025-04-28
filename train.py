@@ -284,6 +284,15 @@ def main():
     H, data = load_data(H)
     logprint(H, "Loading train state")
     S = load_train_state(H)
+    if hasattr(H, "rnn") and H.rnn.init_use_spectrum:
+        # We need to remove the unhashable NumPy array from H
+        H = dataclasses.replace(
+            H,
+            rnn=dataclasses.replace(
+                H.rnn,
+                data_spectrum=None,
+            ),
+        )
     if S.step == 0:
         log(
             H,

@@ -255,10 +255,11 @@ def load_audio(
     test = cache["test"]
     test_lengths = cache["test_lengths"]
 
-    if hasattr(H, rnn) and H.rnn.init_use_spectrum:
+    if hasattr(H, "rnn") and H.rnn.init_use_spectrum:
+        # Assume there are plenty of these
         train_full_length = train[train_lengths == seq_len]
-        spectrum = np.mean(np.log(np.abs(fft(train_full_length)[:, :seq_len // 2])),
-                    0)
+        spectrum = np.mean(
+            np.log(np.abs(fft(train_full_length)[:, 1:seq_len // 2])), 0)
         H = dataclasses.replace(
             H,
             rnn=dataclasses.replace(

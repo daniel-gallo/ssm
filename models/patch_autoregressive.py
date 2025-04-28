@@ -118,7 +118,8 @@ class PatchARHyperparams(Hyperparams):
         return PatchARModel.sample_prior
 
 
-def get_block(type: str, H: PatchARHyperparams, last_scale=1.0, expand=1):
+def get_block(type: str, H: PatchARHyperparams, last_scale=1.0, expand=1,
+              freq_multiplier=1.):
     match type:
         case "conv":
             return ResBlock(
@@ -129,7 +130,7 @@ def get_block(type: str, H: PatchARHyperparams, last_scale=1.0, expand=1):
         case "rglru":
             return ResBlock(
                 H,
-                layer=TemporalMixingBlock(H),
+                layer=TemporalMixingBlock(H, freq_multiplier=freq_multiplier),
                 last_scale=last_scale,
             )
         case "mlp":
@@ -241,6 +242,7 @@ class MLPBlock(nn.Module):
 
 class TemporalMixingBlock(nn.Module):
     H: PatchARHyperparams
+    freq_multiplier: float = 1.
 
     @nn.compact
     def __call__(self, x, state=None):
@@ -268,6 +270,7 @@ class TemporalMixingBlock(nn.Module):
             self.H.rnn,
             d_hidden=self.H.rnn_hidden_size,
             d_out=dim,
+            freq_multiplier=self.freq_multiplier,
         )(z, state.pop())
         new_state.append(h_prev)
 
@@ -324,13 +327,15 @@ class SkipBlock(nn.Module):
     block_structure: Tuple[str] = tuple()
     pool_temporal: int = 1
     pool_feature: int = 1
+    freq_multiplier: float = 1.
 
     def setup(self):
         down_blocks = []
         if self.H.unet:
             for block_type in self.block_structure:
                 down_blocks.append(
-                    get_block(block_type, self.H, self.H.block_last_scale)
+                    get_block(block_type, self.H, self.H.block_last_scale,
+                              freq_multiplier=freq_multiplier)
                 )
                 down_blocks.append(
                     get_block(
@@ -353,7 +358,8 @@ class SkipBlock(nn.Module):
         up_blocks = []
         for block_type in reversed(self.block_structure):
             up_blocks.append(
-                get_block(block_type, self.H, self.H.block_last_scale)
+                get_block(block_type, self.H, self.H.block_last_scale,
+                          freq_multiplier=freq_multiplier)
             )
             up_blocks.append(
                 get_block(
@@ -411,12 +417,14 @@ class SkipBlock(nn.Module):
 class TemporalStack(nn.Module):
     H: PatchARHyperparams
     block_structure: Tuple[str] = ("rglru",)
+    freq_multiplier: float = 1.
 
     def setup(self):
         blocks = []
         for block_type in self.block_structure:
             blocks.append(
-                get_block(block_type, self.H, self.H.block_last_scale)
+                get_block(block_type, self.H, self.H.block_last_scale,
+                          freq_multiplier=freq_multiplier)
             )
             blocks.append(
                 get_block(
@@ -494,18 +502,22 @@ class PatchARModel(nn.Module):
         self.cls_head = CLSHead(self.H)
         self.norm = nn.LayerNorm()
 
-        block = TemporalStack(self.H, self.H.model_structure[-1])
+        freq_multiplier = 1 / np.prod(self.H.pool_temporal)
+        block = TemporalStack(self.H, self.H.model_structure[-1],
+                              freq_multiplier)
         for p_temporal, p_feature, block_structure in zip(
             reversed(self.H.pool_temporal),
             reversed(self.H.pool_features),
             reversed(self.H.model_structure[:-1]),
         ):
+            freq_multiplier = p_temporal * freq_multiplier
             block = SkipBlock(
                 self.H,
                 block,
                 block_structure=block_structure,
                 pool_temporal=p_temporal,
                 pool_feature=p_feature,
+                freq_multiplier=freq_multiplier,
             )
         self.temporal_pyramid = block
 
