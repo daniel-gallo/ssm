@@ -48,6 +48,7 @@ def load_mnist_binarized(H: Hyperparams):
         data_num_channels=1,
         data_num_cats=2,
         data_preprocess_fn=lambda x: 2 * x - 1,
+        data_baseline=0,
         data_num_training_samples=data_num_training_samples,
     )
 
@@ -198,6 +199,7 @@ def load_sc09(H):
         data_num_channels=1,
         data_num_cats=num_cats,
         data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+        data_baseline=128,
         data_num_training_samples=data_num_training_samples,
         data_framerate=16000,
     )
@@ -279,6 +281,7 @@ def load_sc09_mp3(H):
         data_num_channels=1,
         data_num_cats=num_cats,
         data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+        data_baseline=128,
         data_num_training_samples=data_num_training_samples,
         data_framerate=16000,
     )
@@ -354,6 +357,7 @@ def load_sc09_mp3_downsampled(H):
         data_num_channels=1,
         data_num_cats=num_cats,
         data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+        data_baseline=128,
         data_num_training_samples=data_num_training_samples,
         data_framerate=8000,
     )
@@ -427,6 +431,7 @@ def load_beethoven(H):
         data_num_channels=1,
         data_num_cats=num_cats,
         data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+        data_baseline=128,
         data_num_training_samples=data_num_training_samples,
         data_framerate=16000,
     )
@@ -487,6 +492,7 @@ def load_youtube_mix(H):
         data_num_channels=1,
         data_num_cats=num_cats,
         data_preprocess_fn=lambda x: (2 * x / 256) - 1,
+        data_baseline=128,
         data_num_training_samples=data_num_training_samples,
         data_framerate=16000,
     )

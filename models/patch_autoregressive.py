@@ -53,16 +53,16 @@ class PatchARHyperparams(Hyperparams):
     # Model architecture
     pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2, 2)
     model_structure: tuple[tuple[str, ...], ...] = (
-        ("conv", "conv", "conv", "conv"),
-        ("conv", "conv", "conv", "conv"),
-        ("conv", "conv", "conv", "conv"),
         ("conv", "conv", "rglru", "rglru"),
         ("conv", "conv", "rglru", "rglru"),
         ("conv", "conv", "rglru", "rglru"),
-        ("rglru", "rglru", "rglru", "rglru"),
+        ("conv", "conv", "rglru", "rglru"),
+        ("conv", "conv", "rglru", "rglru"),
+        ("conv", "conv", "rglru", "rglru", "rglru", "rglru"),
+        ("rglru", "rglru", "rglru", "rglru", "rglru", "rglru"),
     )
     unet: bool = True
-    cls_head: tuple[str, ...] = ("conv", "conv", "mlp")
+    cls_head: tuple[str, ...] = ("conv", "conv")
 
     use_norm: bool = True
     use_gating: bool = True
@@ -79,6 +79,7 @@ class PatchARHyperparams(Hyperparams):
     dropout_rate: float = 0.2
 
     conv_pooling: bool = False
+    segmented_sampling: bool = True
 
     @property
     def model(self):
@@ -465,23 +466,28 @@ class PatchARModel(nn.Module):
             )
         self.temporal_pyramid = block
 
-    def evaluate(self, x, state=None, training=False):
+    def evaluate(self, x, state=None, inp_state=None, training=False):
         state, cls_state = state if state is not None else self.default_state(x)
+        inp_state = (
+            inp_state if inp_state is not None else self.default_inp_state(x)
+        )
         batch_size, seq_len, _ = x.shape
-        inp = x
+        x = jnp.concatenate(
+            [jnp.expand_dims(inp_state, axis=1), x[:, :-1]], axis=1
+        )
 
         match self.H.input_transform:
             case "sine":
                 assert self.H.base_dim % self.H.data_num_channels == 0
                 x = fourier_features(
-                    inp, self.H.base_dim // self.H.data_num_channels
+                    x, self.H.base_dim // self.H.data_num_channels
                 )
             case "embed":
                 x = self.input_embed(x)
                 x = rearrange(x, "... ch cat -> ... (ch cat)")
             case "mlp":
                 x = self.H.data_preprocess_fn(x)
-        x = jnp.pad(x[:, :-1, :], ((0, 0), (1, 0), (0, 0)))
+        # x = jnp.pad(x[:, :-1, :], ((0, 0), (1, 0), (0, 0)))
 
         if self.H.input_transform == "mlp":
             x = self.input_mlp(x)
@@ -504,13 +510,18 @@ class PatchARModel(nn.Module):
 
     def __call__(self, x, rng=None, training=False):
         return loss_and_metrics(
-            self.evaluate(x, self.default_state(x), training)[0], x
+            self.evaluate(x, self.default_state(x), self.default_inp_state(x))[
+                0
+            ],
+            x,
         )
 
     def sample_prior(self, gen_len, n_samples, rng):
-        segment_len = jnp.prod(jnp.array(self.H.pool_temporal))
-        # segment_len = gen_len  # recovers original, slow sampling
-        assert gen_len % segment_len == 0
+        if self.H.segmented_sampling:
+            segment_len = jnp.prod(jnp.array(self.H.pool_temporal))
+            assert gen_len % segment_len == 0
+        else:
+            segment_len = gen_len  # recovers original, slow sampling
         num_segments = gen_len // segment_len
 
         result = jnp.zeros(
@@ -519,13 +530,13 @@ class PatchARModel(nn.Module):
         )
 
         def gen_segment(i, x):
-            result, state, rng = x
+            result, state, inp_state, rng = x
             loop_rng, rng = random.split(rng, 2)
 
             def fix_point(j, x):
                 segment, state, _ = x
                 prev_state = deepcopy(state)  # Possible inefficiency?
-                segment, state = self.evaluate(segment, state)
+                segment, state = self.evaluate(segment, state, inp_state)
                 return (
                     random.categorical(loop_rng, segment, -1),
                     prev_state,
@@ -539,13 +550,17 @@ class PatchARModel(nn.Module):
                 0, segment_len, fix_point, (segment, state, state)
             )
             result = result.at[:, i, ...].set(segment)
-            return result, state, rng
+            inp_state = segment[:, -1, :]
+            return result, state, inp_state, rng
 
         x = jnp.zeros(
             (n_samples, segment_len, self.H.data_num_channels), "int32"
         )
-        result, _, _ = lax.fori_loop(
-            0, num_segments, gen_segment, (result, self.default_state(x), rng)
+        result, _, _, _ = lax.fori_loop(
+            0,
+            num_segments,
+            gen_segment,
+            (result, self.default_state(x), self.default_inp_state(x), rng),
         )
         result = rearrange(result, "bs seg l c -> bs (seg l) c")
         return result
@@ -555,3 +570,7 @@ class PatchARModel(nn.Module):
             self.temporal_pyramid.default_state(x),
             self.cls_head.default_state(x),
         )
+
+    def default_inp_state(self, x):
+        bs, seq_len, c = x.shape
+        return jnp.full((bs, c), self.H.data_baseline)
