@@ -41,13 +41,14 @@ class Hyperparams:
     batch_size_eval: int = 128
 
     # Dataset
-    dataset: str = "binarized-mnist"
+    dataset: str = "sc09"
     min_max_scaling: bool = False
     # Other useful meta-data, set automatically during data loading
     data_seq_length: Optional[int] = None
     data_num_channels: Optional[int] = None
     data_num_cats: Optional[int] = None
     data_preprocess_fn: Optional[Callable] = None
+    data_baseline: Optional[int] = None
     data_num_training_samples: Optional[int] = None
     data_framerate: Optional[int] = None
 

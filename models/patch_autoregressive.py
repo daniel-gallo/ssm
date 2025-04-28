@@ -517,10 +517,11 @@ class PatchARModel(nn.Module):
 
     def __call__(self, x: PaddedArray, rng=None, training=False):
         return loss_and_metrics(
+            self.H,
             self.evaluate(
-              x.raw, 
-              self.default_state(x.raw), 
-              self.default_inp_state(x.raw), 
+              x.raw,
+              self.default_state(x.raw),
+              self.default_inp_state(x.raw),
               training
             )[0],
             x,
