@@ -59,6 +59,7 @@ class PatchARHyperparams(Hyperparams):
 
     # Model architecture
     pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2, 2)
+    pool_features: tuple[int, ...] = (1, 1, 1, 1, 1, 1)
     model_structure: tuple[tuple[str, ...], ...] = (
         ("conv", "conv", "rglru", "rglru"),
         ("conv", "conv", "rglru", "rglru"),
@@ -68,6 +69,26 @@ class PatchARHyperparams(Hyperparams):
         ("conv", "conv", "rglru", "rglru", "rglru", "rglru"),
         ("rglru", "rglru", "rglru", "rglru", "rglru", "rglru"),
     )
+    # pool_temporal: tuple[int, ...] = (8, 8)
+    # pool_features: tuple[int, ...] = (2, 2)
+    # model_structure: tuple[tuple[str, ...], ...] = (
+    #     ("conv", "conv", "rglru", "rglru", "conv", "conv", "rglru", "rglru"),
+    #     ("conv", "conv", "rglru", "rglru", "conv", "conv", "rglru", "rglru"),
+    #     (
+    #         "conv",
+    #         "conv",
+    #         "rglru",
+    #         "rglru",
+    #         "rglru",
+    #         "conv",
+    #         "conv",
+    #         "rglru",
+    #         "rglru",
+    #         "rglru",
+    #         "rglru",
+    #         "rglru",
+    #     ),
+    # )
     unet: bool = True
     cls_head: tuple[str, ...] = ("conv", "conv")
 
@@ -124,12 +145,13 @@ def get_block(type: str, H: PatchARHyperparams, last_scale=1.0, expand=1):
 class DownPool(nn.Module):
     H: PatchARHyperparams
     factor: int
+    factor_feature: int = 1
 
     @nn.compact
     def __call__(self, x, state=None):
         if self.H.conv_pooling:
             return nn.Conv(
-                x.shape[-1],
+                x.shape[-1] * self.factor_feature,
                 self.factor,
                 self.factor,
                 padding="VALID",
@@ -138,22 +160,26 @@ class DownPool(nn.Module):
         else:
             batch_size, seq_len, dim = x.shape
             x = rearrange(x, "...(l m) d -> ... l (m d)", m=self.factor)
-            return nn.Dense(dim)(x), None
+            return nn.Dense(dim * self.factor_feature)(x), None
 
-    def default_state(self, x):
+    def default_state(self, bs, dim):
         return None
 
 
 class UpPool(nn.Module):
     H: PatchARHyperparams
     factor: int
+    factor_feature: int = 1
 
     @nn.compact
     def __call__(self, x, state=None):
-        state = state if state is not None else self.default_state(x)
+        bs, _, dim = x.shape
+        state = state if state is not None else self.default_state(bs, dim)
+        assert dim % self.factor_feature == 0
+
         if self.H.conv_pooling:
             x = nn.Conv(
-                x.shape[-1],
+                dim // self.factor_feature,
                 self.factor,
                 padding=self.factor - 1,
                 input_dilation=self.factor,
@@ -161,7 +187,7 @@ class UpPool(nn.Module):
             )(x)
         else:
             batch_size, seq_len, dim = x.shape
-            x = nn.Dense(dim * self.factor)(x)
+            x = nn.Dense(dim * self.factor // self.factor_feature)(x)
             x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.factor)
         # ensure causal
         seq_len = x.shape[1]
@@ -169,9 +195,8 @@ class UpPool(nn.Module):
         x, state = jnp.split(x, [seq_len], axis=1)
         return x, state
 
-    def default_state(self, x):
-        bs, _, _ = x.shape
-        return jnp.zeros((bs, self.factor - 1, self.H.base_dim))
+    def default_state(self, bs, dim):
+        return jnp.zeros((bs, self.factor - 1, dim))
 
 
 class ResBlock(nn.Module):
@@ -189,8 +214,8 @@ class ResBlock(nn.Module):
         z = z * self.last_scale
         return x + z, state
 
-    def default_state(self, x):
-        return self.layer.default_state(x)
+    def default_state(self, bs, dim):
+        return self.layer.default_state(bs, dim)
 
 
 class MLPBlock(nn.Module):
@@ -210,7 +235,7 @@ class MLPBlock(nn.Module):
             z = nn.gelu(z)
         return nn.Dense(dim // self.reduce)(z), None
 
-    def default_state(self, x):
+    def default_state(self, bs, dim):
         return None
 
 
@@ -222,7 +247,7 @@ class TemporalMixingBlock(nn.Module):
         bs, seq_len, dim = x.shape
         recurrent_block = get_recurrent_block(self.H.rnn)
         kernel_size = self.H.conv_kernel_size
-        state = state if state is not None else self.default_state(x)
+        state = state if state is not None else self.default_state(bs, dim)
         new_state = []
 
         if self.H.use_temporal_cnn:
@@ -253,13 +278,12 @@ class TemporalMixingBlock(nn.Module):
             x = nn.gelu(z)
         return nn.Dense(dim)(x), new_state
 
-    def default_state(self, x):
-        bs, seq_len, dim = x.shape
+    def default_state(self, bs, dim):
         kernel_size = self.H.conv_kernel_size
 
         state_rnn = jnp.zeros((bs, self.H.rnn.d_hidden))
         if self.H.use_temporal_cnn:
-            state_cnn = jnp.zeros((bs, kernel_size - 1, self.H.base_dim))
+            state_cnn = jnp.zeros((bs, kernel_size - 1, dim))
             return [state_cnn, state_rnn]
         return [state_rnn]
 
@@ -270,7 +294,7 @@ class ConvBlock(nn.Module):
     @nn.compact
     def __call__(self, x, state=None):
         bs, seq_len, dim = x.shape
-        state = state if state is not None else self.default_state(x)
+        state = state if state is not None else self.default_state(bs, dim)
         kernel_size = self.H.conv_kernel_size
 
         z = jnp.concatenate([state, x], axis=1)
@@ -289,10 +313,9 @@ class ConvBlock(nn.Module):
             z = nn.gelu(z)
         return nn.Dense(dim)(z), state
 
-    def default_state(self, x):
-        bs, seq_len, dim = x.shape
+    def default_state(self, bs, dim):
         kernel_size = self.H.conv_kernel_size
-        return jnp.zeros((bs, kernel_size - 1, self.H.base_dim))
+        return jnp.zeros((bs, kernel_size - 1, dim))
 
 
 class SkipBlock(nn.Module):
@@ -300,6 +323,7 @@ class SkipBlock(nn.Module):
     inner_layer: nn.Module
     block_structure: Tuple[str] = tuple()
     pool_temporal: int = 1
+    pool_feature: int = 1
 
     def setup(self):
         down_blocks = []
@@ -318,10 +342,12 @@ class SkipBlock(nn.Module):
         self.down_pool = DownPool(
             self.H,
             self.pool_temporal,
+            self.pool_feature,
         )
         self.up_pool = UpPool(
             self.H,
             self.pool_temporal,
+            self.pool_feature,
         )
 
         up_blocks = []
@@ -337,8 +363,9 @@ class SkipBlock(nn.Module):
         self.up_blocks = up_blocks
 
     def __call__(self, x, state=None, training=False):
+        bs, _, dim = x.shape
         state, state_inner = (
-            state if state is not None else self.default_state(x)
+            state if state is not None else self.default_state(bs, dim)
         )
         state.reverse()
         new_state = []
@@ -369,14 +396,16 @@ class SkipBlock(nn.Module):
                     jnp.concatenate([x, z], axis=-1)
                 ), (new_state, state_inner)
 
-    def default_state(self, x):
-        state = [block.default_state(x) for block in self.down_blocks]
+    def default_state(self, bs, dim):
+        state = [block.default_state(bs, dim) for block in self.down_blocks]
         state += [
-            self.down_pool.default_state(x),
-            self.up_pool.default_state(x),
+            self.down_pool.default_state(bs, dim),
+            self.up_pool.default_state(bs, dim),
         ]
-        state += [block.default_state(x) for block in self.up_blocks]
-        return state, self.inner_layer.default_state(x)
+        state += [block.default_state(bs, dim) for block in self.up_blocks]
+        return state, self.inner_layer.default_state(
+            bs, dim * self.pool_feature
+        )
 
 
 class TemporalStack(nn.Module):
@@ -398,7 +427,8 @@ class TemporalStack(nn.Module):
 
     @nn.compact
     def __call__(self, x, state=None, training=False):
-        state = state if state is not None else self.default_state(x)
+        bs, _, dim = x.shape
+        state = state if state is not None else self.default_state(bs, dim)
         state.reverse()
         new_state = []
 
@@ -408,8 +438,8 @@ class TemporalStack(nn.Module):
 
         return x, new_state
 
-    def default_state(self, x):
-        state = [block.default_state(x) for block in self.blocks]
+    def default_state(self, bs, dim):
+        state = [block.default_state(bs, dim) for block in self.blocks]
         return state
 
 
@@ -428,7 +458,11 @@ class CLSHead(nn.Module):
         self.final = nn.Dense(self.H.data_num_cats)
 
     def __call__(self, x, state=None, training=False):
-        state = state if state is not None else self.default_state(x)
+        state = (
+            state
+            if state is not None
+            else self.default_state(x.shape[0], self.H.base_dim)
+        )
         state.reverse()
         new_state = []
 
@@ -437,8 +471,8 @@ class CLSHead(nn.Module):
             new_state.append(h_prev)
         return self.final(x), new_state
 
-    def default_state(self, x):
-        state = [block.default_state(x) for block in self.blocks]
+    def default_state(self, bs, dim):
+        state = [block.default_state(bs, dim) for block in self.blocks]
         return state
 
 
@@ -461,8 +495,9 @@ class PatchARModel(nn.Module):
         self.norm = nn.LayerNorm()
 
         block = TemporalStack(self.H, self.H.model_structure[-1])
-        for p_temporal, block_structure in zip(
+        for p_temporal, p_feature, block_structure in zip(
             reversed(self.H.pool_temporal),
+            reversed(self.H.pool_features),
             reversed(self.H.model_structure[:-1]),
         ):
             block = SkipBlock(
@@ -470,13 +505,19 @@ class PatchARModel(nn.Module):
                 block,
                 block_structure=block_structure,
                 pool_temporal=p_temporal,
+                pool_feature=p_feature,
             )
         self.temporal_pyramid = block
 
     def evaluate(self, x, state=None, inp_state=None, training=False):
-        state, cls_state = state if state is not None else self.default_state(x)
+        bs, _, channels = x.shape
+        state, cls_state = (
+            state if state is not None else self.default_state(bs)
+        )
         inp_state = (
-            inp_state if inp_state is not None else self.default_inp_state(x)
+            inp_state
+            if inp_state is not None
+            else self.default_inp_state(bs, channels)
         )
         batch_size, seq_len, _ = x.shape
         x = jnp.concatenate(
@@ -516,12 +557,13 @@ class PatchARModel(nn.Module):
         ), (state, cls_state)
 
     def __call__(self, x: PaddedArray, rng=None, training=False):
+        bs, _, channels = x.raw.shape
         return loss_and_metrics(
             self.H,
             self.evaluate(
                 x.raw,
-                self.default_state(x.raw),
-                self.default_inp_state(x.raw),
+                self.default_state(bs),
+                self.default_inp_state(bs, channels),
                 training,
             )[0],
             x,
@@ -564,24 +606,25 @@ class PatchARModel(nn.Module):
             inp_state = segment[:, -1, :]
             return result, state, inp_state, rng
 
-        x = jnp.zeros(
-            (n_samples, segment_len, self.H.data_num_channels), "int32"
-        )
         result, _, _, _ = lax.fori_loop(
             0,
             num_segments,
             gen_segment,
-            (result, self.default_state(x), self.default_inp_state(x), rng),
+            (
+                result,
+                self.default_state(n_samples),
+                self.default_inp_state(n_samples, self.H.data_num_channels),
+                rng,
+            ),
         )
         result = rearrange(result, "bs seg l c -> bs (seg l) c")
         return result
 
-    def default_state(self, x):
+    def default_state(self, bs):
         return (
-            self.temporal_pyramid.default_state(x),
-            self.cls_head.default_state(x),
+            self.temporal_pyramid.default_state(bs, self.H.base_dim),
+            self.cls_head.default_state(bs, self.H.base_dim),
         )
 
-    def default_inp_state(self, x):
-        bs, seq_len, c = x.shape
-        return jnp.full((bs, c), self.H.data_baseline)
+    def default_inp_state(self, bs, channels):
+        return jnp.full((bs, channels), self.H.data_baseline)
