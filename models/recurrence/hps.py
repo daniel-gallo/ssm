@@ -4,7 +4,7 @@ from typing import Literal
 
 @dataclasses.dataclass(frozen=True)
 class RNNHyperparams:
-    block_type: Literal["rnn", "lru", "rglru"] = "rglru"
+    block_type: Literal["rnn", "lru", "rglru", "lstm"] = "rglru"
     scan_implementation: Literal[
         "linear_pallas", "linear_native", "associative_native"
     ] = "linear_pallas"

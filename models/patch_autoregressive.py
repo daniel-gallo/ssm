@@ -281,7 +281,13 @@ class TemporalMixingBlock(nn.Module):
     def default_state(self, bs, dim):
         kernel_size = self.H.conv_kernel_size
 
-        state_rnn = jnp.zeros((bs, self.H.rnn.d_hidden))
+        if self.H.rnn.block_type == "lstm":
+            state_rnn = (
+                jnp.zeros((bs, self.H.rnn.d_hidden)),
+                jnp.zeros((bs, self.H.rnn.d_hidden)),
+            )
+        else:
+            state_rnn = jnp.zeros((bs, self.H.rnn.d_hidden))
         if self.H.use_temporal_cnn:
             state_cnn = jnp.zeros((bs, kernel_size - 1, dim))
             return [state_cnn, state_rnn]
