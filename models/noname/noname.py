@@ -29,7 +29,7 @@ class NoNameHyperparameters(Hyperparams):
     ar_d: int = 384
     ar_num_layers: int = 6
     ar_num_heads: int = 6
-    temperature: float = 0.8
+    temperature: float = 1.0
 
     # Output head
     head: Literal["continuous", "discrete"] = "continuous"
@@ -90,6 +90,7 @@ class NoName(nn.Module):
         return (jnp.sum(diffs != 0) + 1) / self.fsq.codebook_size
 
     def __call__(self, x: jax.Array, rng, **kwargs):
+        x = x.raw
         x = x.squeeze()
         bs, seq_len = x.shape
 
