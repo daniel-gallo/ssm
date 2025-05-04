@@ -17,6 +17,7 @@ class Hyperparams:
     sample_dir: str = "samples"
 
     # Training options
+    profile: bool = False
     seed: int = 0
     batch_size: int = 32
     learning_rate: float = 1e-3

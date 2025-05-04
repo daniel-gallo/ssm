@@ -255,6 +255,31 @@ def train(H: Hyperparams, S: TrainState, data: Dataset):
             generate_samples(H, S)
 
 
+def profile(H: Hyperparams, S: TrainState, data: Dataset):
+    jax.profiler.start_trace("traces/")
+
+    metrics = None
+    for train_step, batch in zip(
+        range(3), reshape_batches(H.batch_size, data.train)
+    ):
+        batch = jax.device_put(batch, SHARDING_BATCH)
+        with jax.profiler.StepTraceAnnotation(
+            "train_step", step_num=train_step
+        ):
+            S, metrics = train_iter(H, S, batch)
+    metrics["loss"].block_until_ready()
+
+    metrics = []
+    for val_step, batch in zip(
+        range(3), reshape_batches(H.batch_size_eval, data.val)
+    ):
+        batch = jax.device_put(batch, SHARDING_BATCH)
+        with jax.profiler.StepTraceAnnotation("val_step", step_num=val_step):
+            metrics.append(eval_iter(H, S, S.rng, batch))
+    metrics[-1]["loss"].block_until_ready()
+    jax.profiler.stop_trace()
+
+
 def log_configuration(H: Hyperparams):
     if H.enable_wandb:
         import wandb
@@ -294,8 +319,12 @@ def main():
             ),
         )
 
-    logprint(H, "Training", id=H.id)
-    train(H, S, data)
+    if H.profile:
+        logprint(H, "Profiling", id=H.id)
+        profile(H, S, data)
+    else:
+        logprint(H, "Training", id=H.id)
+        train(H, S, data)
     if H.enable_wandb:
         import wandb
 

@@ -177,3 +177,4 @@ wandb/
 samples/
 .DS_Store
 .idea
+traces/

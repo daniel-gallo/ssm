@@ -1,6 +1,12 @@
 [![pre-commit](https://github.com/daniel-gallo/ssm/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/daniel-gallo/ssm/actions/workflows/pre-commit.yml)
-# Dev instructions
-As linter / formatter, we can use [Ruff](https://docs.astral.sh/ruff/).
+
+## Profiling the model
+1. Run `train.py` with the `--profile True` flag
+2. Launch tensorboard:
+```bash
+tensorboard --logdir traces/
+```
+3. Open tensorboard by accessing `http://localhost:6006/` (you might need to forward some ports). The tools `memory_viewer` and `trace_viewer` are especially interesting. Refer to [Phillip Lippe's guide](https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/scaling/JAX/single_gpu_transformer.html) for more info.
 
 ## Launching a sweep on TPUs
 1. Edit `example-sweep.yaml` to configure the sweep, save the file as
@@ -44,8 +50,10 @@ of output _before_ the output of our startup script.
 
 In the existing node case, the log is saved in `~/startup-log.txt`.
 
+## Dev instructions
+As linter / formatter, we can use [Ruff](https://docs.astral.sh/ruff/).
 
-## Zed instructions
+### Zed instructions
 Add this to `~/.config/zed/settings.json`
 
 ```json
@@ -71,7 +79,7 @@ Add this to `~/.config/zed/settings.json`
 }
 
 ```
-## Pre-commit hook
+### Pre-commit hook
 This ensures that your commits will stick to a pre-defined coding style.
 1. Install `pre-commit` (using pip for example)
 1. Run `pre-commit install`
