@@ -2,6 +2,10 @@
 line-length = 80
 lint.extend-select = ["I"]
 
+# Ignore linting rules in recurrentgemma folder
+[tool.ruff.lint.per-file-ignores]
+"models/recurrentgemma/*" = ["F722", "E741"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

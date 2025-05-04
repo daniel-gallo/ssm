@@ -22,6 +22,7 @@ from models import (
     DiffusionHyperparams,
     HaarHyperparams,
     PatchARHyperparams,
+    RecurrentGemmaHyperparams,
     S4Hyperparams,
     VSSMHyperparams,
 )
@@ -301,6 +302,7 @@ def main():
             "diffusion": DiffusionHyperparams,
             "haar": HaarHyperparams,
             "noname": NoNameHyperparameters,
+            "recurrentgemma": RecurrentGemmaHyperparams,
         },
         as_positional=False,
     )
