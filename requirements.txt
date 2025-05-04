@@ -16,3 +16,4 @@ librosa
 huggingface_hub
 jaxtyping==0.2.38
 typeguard==2.13.3
+sentencepiece # Not directly used, but it's a dependency of recurrentgemma
