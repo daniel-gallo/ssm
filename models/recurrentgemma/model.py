@@ -1,4 +1,6 @@
+import dataclasses
 import itertools
+from typing import Tuple
 
 import jax
 import jax.numpy as jnp
@@ -9,6 +11,7 @@ from data import PaddedArray
 from hps import Hyperparams
 
 
+@dataclasses.dataclass(frozen=True)
 class RecurrentGemmaHyperparams(Hyperparams):
     width: int = 256
     mlp_expanded_width: int = 3 * 256
@@ -17,6 +20,7 @@ class RecurrentGemmaHyperparams(Hyperparams):
     embeddings_scale_by_sqrt_dim: bool = True
     attention_window_size: int = 256
     logits_soft_cap: float = 30.0
+    pattern: Tuple[str, ...] = ("recurrent", "recurrent", "attention")
 
     @property
     def model(self):
@@ -57,18 +61,22 @@ def loss_and_metrics(logits, x: PaddedArray):
         "min_l": jnp.min(logits[:, -1]),
     }
 
+def get_griffin_pattern(pattern: Tuple[str]):
+    str_to_block = {
+        "recurrent": recurrentgemma.TemporalBlockType.RECURRENT,
+        "attention": recurrentgemma.TemporalBlockType.ATTENTION,
+    }
+    pattern = map(str_to_block.__getitem__, pattern)
+    pattern = itertools.cycle(pattern)
+
+    return pattern
+
 
 class RecurrentGemma(nn.Module):
     H: RecurrentGemmaHyperparams
 
     def setup(self):
-        griffin_pattern = itertools.cycle(
-            [
-                recurrentgemma.TemporalBlockType.RECURRENT,
-                recurrentgemma.TemporalBlockType.RECURRENT,
-                recurrentgemma.TemporalBlockType.ATTENTION,
-            ]
-        )
+        griffin_pattern = get_griffin_pattern(self.H.pattern)
         model_config = recurrentgemma.GriffinConfig(
             vocab_size=self.H.data_num_cats,
             width=self.H.width,
