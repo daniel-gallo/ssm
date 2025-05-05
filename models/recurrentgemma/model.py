@@ -61,38 +61,36 @@ def loss_and_metrics(logits, x: PaddedArray):
         "min_l": jnp.min(logits[:, -1]),
     }
 
-def get_griffin_pattern(pattern: Tuple[str]):
+
+def get_griffin_config(H: RecurrentGemmaHyperparams):
     str_to_block = {
         "recurrent": recurrentgemma.TemporalBlockType.RECURRENT,
         "attention": recurrentgemma.TemporalBlockType.ATTENTION,
     }
-    pattern = map(str_to_block.__getitem__, pattern)
+    pattern = map(str_to_block.__getitem__, H.pattern)
     pattern = itertools.cycle(pattern)
+    block_types = tuple(itertools.islice(pattern, H.num_blocks))
 
-    return pattern
+    return recurrentgemma.GriffinConfig(
+        vocab_size=H.data_num_cats,
+        width=H.width,
+        mlp_expanded_width=H.mlp_expanded_width,
+        num_heads=H.num_heads,
+        block_types=block_types,
+        embeddings_scale_by_sqrt_dim=H.embeddings_scale_by_sqrt_dim,
+        attention_window_size=H.attention_window_size,
+        logits_soft_cap=H.logits_soft_cap,
+        # TODO: Linear Pallas seems to interfere with the manual sharding that we do
+        scan_type=recurrentgemma.ScanType.LINEAR_NATIVE,
+    )
 
 
 class RecurrentGemma(nn.Module):
     H: RecurrentGemmaHyperparams
 
     def setup(self):
-        griffin_pattern = get_griffin_pattern(self.H.pattern)
-        model_config = recurrentgemma.GriffinConfig(
-            vocab_size=self.H.data_num_cats,
-            width=self.H.width,
-            mlp_expanded_width=self.H.mlp_expanded_width,
-            num_heads=self.H.num_heads,
-            block_types=tuple(
-                itertools.islice(griffin_pattern, self.H.num_blocks)
-            ),
-            embeddings_scale_by_sqrt_dim=self.H.embeddings_scale_by_sqrt_dim,
-            attention_window_size=self.H.attention_window_size,
-            logits_soft_cap=self.H.logits_soft_cap,
-            # TODO: Linear Pallas seems to interfere with the manual sharding that we do
-            scan_type=recurrentgemma.ScanType.LINEAR_NATIVE,
-        )
         self.model = recurrentgemma.Griffin(
-            model_config, param_dtype=jnp.bfloat16
+            get_griffin_config(self.H), param_dtype=jnp.bfloat16
         )
 
     def __call__(self, x: PaddedArray, rng=None, training=False):
@@ -107,4 +105,6 @@ class RecurrentGemma(nn.Module):
         return loss_and_metrics(logits, x)
 
     def sample_prior(self, gen_len, n_samples, rng):
+        # TODO: not sure if we can implement it like this.
+        # For now, the implementation is in sample.py
         raise NotImplementedError
