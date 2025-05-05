@@ -1,7 +1,7 @@
 import dataclasses
 import time
 from functools import partial
-from typing import Any
+from typing import Any, Optional
 
 import flax
 import jax
@@ -77,15 +77,22 @@ def save_checkpoint(H: Hyperparams, S: TrainState):
     )
 
 
-def restore_checkpoint(H: Hyperparams, S: TrainState):
+def restore_checkpoint(
+    H: Hyperparams, S: TrainState, override_id: Optional[str]
+):
+    if override_id:
+        checkpoint_prefix = f"{override_id}_"
+    else:
+        checkpoint_prefix = H.checkpoint_prefix
+
     latest_checkpoint_path = checkpoints.latest_checkpoint(
-        H.checkpoint_dir, H.checkpoint_prefix
+        H.checkpoint_dir, checkpoint_prefix
     )
     if latest_checkpoint_path is not None:
         S_dict = checkpoints.restore_checkpoint(
             H.checkpoint_dir,
             target=dataclasses.asdict(S),
-            prefix=H.checkpoint_prefix,
+            prefix=checkpoint_prefix,
         )
         S = TrainState(**S_dict)
         logprint(H, f"Checkpoint restored from {latest_checkpoint_path}")
@@ -131,7 +138,7 @@ def cond(pred, true_val, false_val):
     return tree.map(partial(jnp.where, pred), true_val, false_val)
 
 
-def load_train_state(H: Hyperparams):
+def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
     rng_init, rng_train = random.split(random.PRNGKey(H.seed))
     weights = jax.jit(H.model.init)(
         rng_init,
@@ -144,7 +151,7 @@ def load_train_state(H: Hyperparams):
 
     optimizer_state = H.optimizer.init(weights)
     S = TrainState(weights, weights, optimizer_state, 0, rng_train)
-    S = restore_checkpoint(H, S)
+    S = restore_checkpoint(H, S, override_id)
     S = jax.device_put(S, SHARDING_REPLICATED)
     return S
 
