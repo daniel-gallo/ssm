@@ -133,7 +133,7 @@ def cond(pred, true_val, false_val):
 
 def load_train_state(H: Hyperparams):
     rng_init, rng_train = random.split(random.PRNGKey(H.seed))
-    weights = H.model.init(
+    weights = jax.jit(H.model.init)(
         rng_init,
         PaddedArray(
             jnp.zeros((H.batch_size,) + H.data_shape, "int32"),
