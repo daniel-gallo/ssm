@@ -16,6 +16,7 @@ class ContinuousHead(nn.Module):
         original = original.raw.squeeze()
         assert original.shape == (bs, seq_len)
 
+        # TODO: take padding into account
         reconstruction = self.final_layer(reconstruction)
         reconstruction = nn.sigmoid(reconstruction)
         reconstruction = reconstruction.squeeze()
@@ -25,7 +26,7 @@ class ContinuousHead(nn.Module):
         wave_l1 = jnp.mean(jnp.abs(reconstruction - original))
         mel_l1 = mel_loss(reconstruction, original)
         return {
-            "loss": wave_l1 + mel_l1,
+            "loss": wave_l1,
             "wave_l1": wave_l1,
             "mel_l1": mel_l1,
         }
@@ -57,10 +58,18 @@ class DiscreteHead(nn.Module):
         logits = self.final_layer(reconstruction)
 
         wave_nll = -padded_log_likelihood(logits, original)
+        # TODO: take padding into account
+        wave_l1 = jnp.mean(
+            jnp.abs(
+                (original.raw.squeeze() - jnp.argmax(logits, axis=-1))
+                / self.num_cats
+            )
+        )
         mel_l1 = mel_loss(logits.argmax(axis=-1), original.raw.squeeze(axis=-1))
         return {
-            "loss": wave_nll + mel_l1,
+            "loss": wave_nll,
             "wave_nll": wave_nll,
+            "wave_l1": wave_l1,
             "mel_l1": mel_l1,
         }
 
