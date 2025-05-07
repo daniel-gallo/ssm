@@ -8,8 +8,9 @@ import numpy as np
 from einops import rearrange
 
 from hps import Hyperparams
+from models.losses import log_likelihood
 from models.noname.autoencoder import Decoder, Encoder
-from models.noname.heads import ContinuousHead, DiscreteHead, log_likelihood
+from models.noname.heads import ContinuousHead, DiscreteHead
 from models.noname.quantizer import FSQ
 from models.noname.transformer import Transformer
 from models.noname.utils import get_sinusoidal_embeddings
@@ -90,12 +91,8 @@ class NoName(nn.Module):
         return (jnp.sum(diffs != 0) + 1) / self.fsq.codebook_size
 
     def __call__(self, x: jax.Array, rng, **kwargs):
-        x = x.raw
-        x = x.squeeze()
-        bs, seq_len = x.shape
-
         # Train auto-encoder
-        z = self.encoder(self.get_encoder_input(x))
+        z = self.encoder(self.get_encoder_input(x.raw.squeeze()))
         z_hat = self.fsq.quantize(self.enc_to_fsq(z))
         reconstruction = self.decoder(self.fsq_to_dec(z_hat))
         metrics = self.head.loss(reconstruction, x)

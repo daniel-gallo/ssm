@@ -2,13 +2,13 @@ import dataclasses
 import itertools
 from typing import Tuple
 
-import jax
 import jax.numpy as jnp
 from flax import linen as nn
 
 import models.recurrentgemma.jax as recurrentgemma
 from data import PaddedArray
 from hps import Hyperparams
+from models.losses import padded_log_likelihood
 
 
 @dataclasses.dataclass(frozen=True)
@@ -31,24 +31,8 @@ class RecurrentGemmaHyperparams(Hyperparams):
         return RecurrentGemma.sample_prior
 
 
-def log_likelihood(logits, x: PaddedArray):
-    bat, seq, cat = logits.shape
-    assert x.raw.squeeze().shape == (bat, seq)
-    assert x.lengths.shape == (bat,)
-    mask = (
-        jnp.arange(seq, dtype=jnp.int32)[jnp.newaxis, :]
-        < x.lengths[:, jnp.newaxis]
-    )[..., jnp.newaxis].astype(jnp.float32)
-    return jnp.sum(
-        jax.nn.log_softmax(logits) * mask * nn.one_hot(x.raw.squeeze(), cat)
-    )
-
-
 def loss_and_metrics(logits, x: PaddedArray):
-    _, _, chan = x.raw.shape
-    assert chan == 1
-    normalizer = chan * jnp.sum(x.lengths) * jnp.log(2)
-    ll = log_likelihood(logits, x) / normalizer
+    ll = padded_log_likelihood(logits, x)
     loss = -ll
     return loss, {
         "loss": loss,
