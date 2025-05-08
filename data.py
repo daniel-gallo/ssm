@@ -29,6 +29,9 @@ class PaddedArray:
     raw: np.ndarray  # shape: (batch, seq, chan)
     lengths: np.ndarray  # shape: (batch,)
 
+    def __len__(self):
+        return len(self.raw)
+
 
 @dataclasses.dataclass(frozen=True)
 class Dataset:

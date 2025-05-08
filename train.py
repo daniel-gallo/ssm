@@ -158,23 +158,56 @@ def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
 
 @partial(jax.jit, static_argnums=0)
 def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
-    rng, rng_iter, rng_dropout = random.split(S.rng, 3)
-
-    def lossfun(weights):
-        # TODO: use JAX rng instead of FLAX (temporary fix for the S4 code)
+    def loss_fn(weights, minibatch, rng):
+        rng_iter, rng_dropout = random.split(rng, 2)
         return H.model.apply(
             weights,
-            batch,
+            minibatch,
             rng_iter,
             training=True,
             rngs={"dropout": rng_dropout},
         )
 
-    gradval, metrics = jax.grad(lossfun, has_aux=True)(S.weights)
-    gradval, skip, metrics = clip_grad(H, gradval, metrics)
+    def get_grads_and_metrics(weights, batch, rng, num_minibatches):
+        assert len(batch) % num_minibatches == 0
+        minibatch_size = len(batch) // num_minibatches
+
+        grads = None
+        metrics = None
+
+        for i in range(num_minibatches):
+            rng, rng_iter = random.split(rng)
+            low = i * minibatch_size
+            high = (i + 1) * minibatch_size
+            minibatch = PaddedArray(
+                raw=batch.raw[low:high],
+                lengths=batch.lengths[low:high],
+            )
+
+            minibatch_grads, minibatch_metrics = jax.grad(
+                loss_fn, has_aux=True
+            )(weights, minibatch, rng_iter)
+
+            if grads is None:
+                grads = minibatch_grads
+                metrics = minibatch_metrics
+            else:
+                grads = jax.tree.map(jnp.add, grads, minibatch_grads)
+                metrics = jax.tree.map(jnp.add, metrics, minibatch_metrics)
+
+        grads = jax.tree.map(lambda x: x / num_minibatches, grads)
+        metrics = jax.tree.map(lambda x: x / num_minibatches, metrics)
+
+        return grads, metrics
+
+    rng, rng_grads = random.split(S.rng, 2)
+    grads, metrics = get_grads_and_metrics(
+        S.weights, batch, rng_grads, H.num_minibatches
+    )
+    grads, skip, metrics = clip_grad(H, grads, metrics)
 
     updates, optimizer_state_new = H.optimizer.update(
-        gradval, S.optimizer_state, S.weights
+        grads, S.optimizer_state, S.weights
     )
     weights_new = optax.apply_updates(S.weights, updates)
     weights_ema_new = tree.map(

@@ -20,6 +20,7 @@ class Hyperparams:
     profile: bool = False
     seed: int = 0
     batch_size: int = 32
+    num_minibatches: int = 1
     learning_rate: float = 1e-3
     learning_rate_scheduler: Literal["constant", "warmup_cosine_decay"] = (
         "constant"
