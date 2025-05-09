@@ -2,7 +2,7 @@ jax==0.5.3
 jaxlib==0.5.3
 numpy
 scipy
-jsonargparse
+jsonargparse==4.38.0
 flax
 optax
 pytest
