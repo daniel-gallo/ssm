@@ -14,7 +14,7 @@ from models.losses import padded_log_likelihood
 @dataclasses.dataclass(frozen=True)
 class RecurrentGemmaHyperparams(Hyperparams):
     width: int = 256
-    mlp_expanded_width: int = 3 * 256
+    mlp_expansion_factor: int = 3
     num_heads: int = 8
     num_blocks: int = 8
     embeddings_scale_by_sqrt_dim: bool = True
@@ -58,7 +58,7 @@ def get_griffin_config(H: RecurrentGemmaHyperparams):
     return recurrentgemma.GriffinConfig(
         vocab_size=H.data_num_cats,
         width=H.width,
-        mlp_expanded_width=H.mlp_expanded_width,
+        mlp_expanded_width=H.width * H.mlp_expansion_factor,
         num_heads=H.num_heads,
         block_types=block_types,
         embeddings_scale_by_sqrt_dim=H.embeddings_scale_by_sqrt_dim,
