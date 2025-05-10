@@ -1,6 +1,6 @@
 import dataclasses
 import itertools
-from typing import Tuple
+from typing import List, Tuple
 
 import jax.numpy as jnp
 from flax import linen as nn
@@ -27,8 +27,56 @@ class RecurrentGemmaHyperparams(Hyperparams):
         return RecurrentGemma(self)
 
     @property
-    def sample_prior(self):
-        return RecurrentGemma.sample_prior
+    def sample_fn(self):
+        def _sample_fn(weights, seq_len, num_samples, rng):
+            griffin_config = get_griffin_config(self)
+            sampler = recurrentgemma.Sampler(
+                model=recurrentgemma.Griffin(
+                    griffin_config, param_dtype=jnp.bfloat16
+                ),
+                vocab=AudioVocabulary(),
+                params=weights["params"]["model"],
+                deterministic_sampling=False,
+            )
+
+            sample = sampler(
+                input_strings=[""] * num_samples,
+                total_generation_steps=seq_len,
+                rng=rng,
+                return_logits=True,
+            ).tokens
+            sample = jnp.stack([sample[i] for i in range(num_samples)])[
+                :, :, jnp.newaxis
+            ]
+
+            return sample
+
+        return _sample_fn
+
+
+@dataclasses.dataclass
+class AudioVocabulary:
+    num_cats: int = 256
+    _bos_id: int = 128
+    _eos_id: int = 256
+    _pad_id: int = 128
+
+    def bos_id(self):
+        return self._bos_id
+
+    def eos_id(self):
+        return self._eos_id
+
+    def pad_id(self):
+        return self._pad_id
+
+    def EncodeAsIds(self, input_string: str):
+        tokens = input_string.split()
+        tokens = list(map(int, tokens))
+        return tokens
+
+    def DecodeIds(self, tokens: List[int]):
+        return " ".join(map(str, tokens))
 
 
 def loss_and_metrics(logits, x: PaddedArray):
@@ -87,8 +135,3 @@ class RecurrentGemma(nn.Module):
         pos = jnp.repeat(jnp.arange(seq_len)[None], bs, axis=0)
         logits, _ = self.model(model_input, pos, return_cache=False)
         return loss_and_metrics(logits, x)
-
-    def sample_prior(self, gen_len, n_samples, rng):
-        # TODO: not sure if we can implement it like this.
-        # For now, the implementation is in sample.py
-        raise NotImplementedError

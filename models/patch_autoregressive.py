@@ -114,8 +114,17 @@ class PatchARHyperparams(Hyperparams):
         return PatchARModel(self)
 
     @property
-    def sample_prior(self):
-        return PatchARModel.sample_prior
+    def sample_fn(self):
+        def _sample_fn(weights, seq_len, num_samples, rng):
+            return self.model.apply(
+                weights,
+                seq_len,
+                num_samples,
+                rng,
+                method=self.model.sample_prior,
+            )
+
+        return _sample_fn
 
 
 def get_block(type: str, H: PatchARHyperparams, last_scale=1.0, expand=1):

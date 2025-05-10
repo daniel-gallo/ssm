@@ -265,12 +265,8 @@ def generate_samples(H: Hyperparams, S: TrainState):
     save_samples(
         H,
         S.step,
-        H.model.apply(
-            S.weights_ema,
-            H.data_seq_length,
-            H.num_samples_per_eval,
-            S.rng,
-            method=H.sample_prior,
+        H.sample_fn(
+            S.weights_ema, H.data_seq_length, H.num_samples_per_eval, S.rng
         ),
     )
 
@@ -281,7 +277,7 @@ def train(H: Hyperparams, S: TrainState, data: Dataset):
     start_epoch = get_epoch(S.step, H.batch_size, H.data_num_training_samples)
     assert start_epoch.is_integer()
     start_epoch = int(start_epoch)
-    
+
     for e in range(start_epoch, H.num_epochs):
         data_train = data.train
         if H.shuffle_before_epoch or e == 0:
