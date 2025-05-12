@@ -108,8 +108,7 @@ def restore_checkpoint(
 
 def get_epoch(step, batch_size, data_size):
     num_batches = data_size // batch_size
-    assert step % num_batches == 0
-    return step // num_batches
+    return (step / num_batches).item()
 
 
 def accum_metrics(metrics):
@@ -239,6 +238,9 @@ def train_epoch(H: Hyperparams, S: TrainState, data: PaddedArray):
         S, metrics = train_iter(H, S, batch)
         metrics = prepend_to_keys(metrics, "train/")
         metrics["lr"] = H.scheduler(S.step)
+        metrics["epoch"] = get_epoch(
+            S.step, H.batch_size, H.data_num_training_samples
+        )
         logtrain(H, S.step, metrics)
     return S
 
@@ -268,12 +270,8 @@ def generate_samples(H: Hyperparams, S: TrainState):
     save_samples(
         H,
         S.step,
-        H.model.apply(
-            S.weights_ema,
-            H.data_seq_length,
-            H.num_samples_per_eval,
-            S.rng,
-            method=H.sample_prior,
+        H.sample_fn(
+            S.weights_ema, H.data_seq_length, H.num_samples_per_eval, S.rng
         ),
     )
 
@@ -282,6 +280,9 @@ def train(H: Hyperparams, S: TrainState, data: Dataset):
     t_last_checkpoint = time.time()
     # In case we're resuming a run
     start_epoch = get_epoch(S.step, H.batch_size, H.data_num_training_samples)
+    assert start_epoch.is_integer()
+    start_epoch = int(start_epoch)
+
     for e in range(start_epoch, H.num_epochs):
         data_train = data.train
         if H.shuffle_before_epoch or e == 0:
