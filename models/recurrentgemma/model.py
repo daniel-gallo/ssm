@@ -6,6 +6,7 @@ import jax.numpy as jnp
 from flax import linen as nn
 
 import models.recurrentgemma.jax as recurrentgemma
+from models.recurrentgemma.jax import ShardingSpec
 from data import PaddedArray
 from hps import Hyperparams
 from models.losses import padded_log_likelihood
@@ -64,8 +65,6 @@ def get_griffin_config(H: RecurrentGemmaHyperparams):
         embeddings_scale_by_sqrt_dim=H.embeddings_scale_by_sqrt_dim,
         attention_window_size=H.attention_window_size,
         logits_soft_cap=H.logits_soft_cap,
-        # TODO: Linear Pallas seems to interfere with the manual sharding that we do
-        scan_type=recurrentgemma.ScanType.LINEAR_NATIVE,
     )
 
 
@@ -73,8 +72,14 @@ class RecurrentGemma(nn.Module):
     H: RecurrentGemmaHyperparams
 
     def setup(self):
+        sharding_spec = ShardingSpec(
+            mesh=self.H._mesh,
+            batch_axis_name="batch",
+            sequence_axis_name="seq",
+        )
         self.model = recurrentgemma.Griffin(
-            get_griffin_config(self.H), param_dtype=jnp.bfloat16
+            get_griffin_config(self.H), param_dtype=jnp.bfloat16,
+            scan_sharding_spec=sharding_spec,
         )
 
     def __call__(self, x: PaddedArray, rng=None, training=False):
