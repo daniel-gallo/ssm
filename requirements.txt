@@ -15,5 +15,5 @@ soundfile
 librosa
 huggingface_hub
 jaxtyping
-typeguard
+typeguard==2.13.3
 sentencepiece # Not directly used, but it's a dependency of recurrentgemma
