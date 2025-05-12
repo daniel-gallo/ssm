@@ -49,7 +49,7 @@ def logtrain(H: Hyperparams, step, metrics):
 
     if int(step) in early_logsteps or not step % H.steps_per_print:
         logprint(H, step=step, **metrics)
-    if H.enable_wandb:
+    if H.enable_wandb and jax.process_index() == 0:
         import wandb
 
         wandb.log(metrics, step)
@@ -57,7 +57,7 @@ def logtrain(H: Hyperparams, step, metrics):
 
 def log(H: Hyperparams, step, metrics):
     logprint(H, step=step, **metrics)
-    if H.enable_wandb:
+    if H.enable_wandb and jax.process_index() == 0:
         import wandb
 
         wandb.log(metrics, step)

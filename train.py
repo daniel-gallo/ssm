@@ -72,13 +72,14 @@ class TrainState:
 
 
 def save_checkpoint(H: Hyperparams, S: TrainState):
-    logprint(H, "Saving checkpoint", step=S.step)
-    checkpoints.save_checkpoint(
-        H.checkpoint_dir,
-        dataclasses.asdict(S),
-        S.step,
-        H.checkpoint_prefix,
-    )
+    if jax.process_index() == 0:
+        logprint(H, "Saving checkpoint", step=S.step)
+        checkpoints.save_checkpoint(
+            H.checkpoint_dir,
+            dataclasses.asdict(S),
+            S.step,
+            H.checkpoint_prefix,
+        )
 
 
 def restore_checkpoint(
@@ -326,7 +327,7 @@ def profile(H: Hyperparams, S: TrainState, data: Dataset):
 
 
 def log_configuration(H: Hyperparams):
-    if H.enable_wandb:
+    if H.enable_wandb and jax.process_index() == 0:
         import wandb
 
         wandb.init(
@@ -371,7 +372,7 @@ def main():
     else:
         logprint(H, "Training", id=H.id)
         train(H, S, data)
-    if H.enable_wandb:
+    if H.enable_wandb and jax.process_index() == 0:
         import wandb
 
         wandb.finish()
