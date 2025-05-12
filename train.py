@@ -29,11 +29,9 @@ from models import (
 from models.noname.noname import NoNameHyperparameters
 from util import safe_map
 
+jax.config.update("jax_threefry_partitionable", True)
 flax.config.update("flax_use_orbax_checkpointing", False)
 map = safe_map
-_mesh = jax.make_mesh((jax.device_count(),), ("batch",))
-SHARDING_REPLICATED = NamedSharding(_mesh, P())
-SHARDING_BATCH = NamedSharding(_mesh, P("batch"))
 
 
 def reshape_batches(batch_size, data: PaddedArray):
@@ -46,6 +44,15 @@ def reshape_batches(batch_size, data: PaddedArray):
         )
 
     return map(PaddedArray, reshape(data.raw), reshape(data.lengths))
+
+
+def device_put_padded_array(H: Hyperparams, data: PaddedArray) -> PaddedArray:
+    return dataclasses.replace(
+        data,
+        raw=jax.device_put(data.raw, H.sharding_batch),
+        lengths=jax.device_put(data.lengths, H.sharding_lengths),
+    )
+
 
 
 def shuffle(rng, data: PaddedArray):
@@ -152,7 +159,7 @@ def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
     optimizer_state = H.optimizer.init(weights)
     S = TrainState(weights, weights, optimizer_state, 0, rng_train)
     S = restore_checkpoint(H, S, override_id)
-    S = jax.device_put(S, SHARDING_REPLICATED)
+    S = jax.device_put(S, H.sharding_train_state)
     return S
 
 
@@ -230,7 +237,7 @@ def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
 
 def train_epoch(H: Hyperparams, S: TrainState, data: PaddedArray):
     for batch in reshape_batches(H.batch_size, data):
-        batch = jax.device_put(batch, SHARDING_BATCH)
+        batch = device_put_padded_array(H, batch)
         S, metrics = train_iter(H, S, batch)
         metrics = prepend_to_keys(metrics, "train/")
         metrics["lr"] = H.scheduler(S.step)
@@ -254,7 +261,7 @@ def eval(H: Hyperparams, S: TrainState, data: PaddedArray, split_name: str):
     metrics = []
     for batch in reshape_batches(H.batch_size_eval, data):
         rng, rng_iter = random.split(rng)
-        batch = jax.device_put(batch, SHARDING_BATCH)
+        batch = device_put_padded_array(H, batch)
         metrics.append(eval_iter(H, S, rng_iter, batch))
     return prepend_to_keys(accum_metrics(metrics), f"{split_name}/")
 
@@ -303,7 +310,7 @@ def profile(H: Hyperparams, S: TrainState, data: Dataset):
     for train_step, batch in zip(
         range(3), reshape_batches(H.batch_size, data.train)
     ):
-        batch = jax.device_put(batch, SHARDING_BATCH)
+        batch = device_put_padded_array(H, batch)
         with jax.profiler.StepTraceAnnotation(
             "train_step", step_num=train_step
         ):
@@ -314,7 +321,7 @@ def profile(H: Hyperparams, S: TrainState, data: Dataset):
     for val_step, batch in zip(
         range(3), reshape_batches(H.batch_size_eval, data.val)
     ):
-        batch = jax.device_put(batch, SHARDING_BATCH)
+        batch = device_put_padded_array(H, batch)
         with jax.profiler.StepTraceAnnotation("val_step", step_num=val_step):
             metrics.append(eval_iter(H, S, S.rng, batch))
     metrics[-1]["loss"].block_until_ready()

@@ -6,6 +6,9 @@ from zlib import adler32
 import flax.linen as nn
 import optax
 from optax.schedules import Schedule
+import jax
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 
 
 @dataclasses.dataclass(frozen=True)
@@ -53,6 +56,30 @@ class Hyperparams:
     data_baseline: Optional[int] = None
     data_num_training_samples: Optional[int] = None
     data_framerate: Optional[int] = None
+
+    @property
+    def _mesh(self):
+        if self.batch_size >= jax.device_count():
+            assert self.batch_size % jax.device_count() == 0
+            return jax.make_mesh((jax.device_count(), 1), ("batch", "seq"))
+        else:
+            assert jax.device_count() % self.batch_size == 0
+            seq_shards = jax.device_count() // self.batch_size
+            return jax.make_mesh(
+                (self.batch_size, seq_shards), ("batch", "seq")
+            )
+
+    @property
+    def sharding_batch(self):
+        return NamedSharding(self._mesh, P("batch", "seq"))
+
+    @property
+    def sharding_lengths(self):
+        return NamedSharding(self._mesh, P("batch"))
+
+    @property
+    def sharding_train_state(self):
+        return NamedSharding(self._mesh, P())
 
     @property
     def data_shape(self):
