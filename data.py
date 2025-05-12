@@ -10,7 +10,7 @@ from typing import List
 from urllib.request import urlretrieve
 
 import ffmpeg
-import jax.numpy as jnp
+import jax
 import numpy as np
 from huggingface_hub import hf_hub_download
 from jax.tree_util import register_dataclass
@@ -633,7 +633,7 @@ def save_mnist_binarized(H: Hyperparams, step, samples):
     samples = np.astype(255 * np.hstack(samples), "uint8")
     samples = Image.fromarray(np.array(samples), mode="L")
     samples.save(sample_dir / f"step-{step}.png")
-    if H.enable_wandb:
+    if H.enable_wandb and jax.process_index() == 0:
         import wandb
 
         wandb.log({"samples": wandb.Image(samples)}, step)
@@ -656,7 +656,7 @@ def save_audio(H: Hyperparams, step, samples):
         np_to_wav(sample, sample_path, H.data_framerate)
         sample_filenames.append(str(sample_path))
 
-    if H.enable_wandb:
+    if H.enable_wandb and jax.process_index() == 0:
         import wandb
 
         wandb.log({"samples": [wandb.Audio(f) for f in sample_filenames]}, step)
