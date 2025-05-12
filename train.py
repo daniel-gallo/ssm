@@ -10,8 +10,6 @@ import numpy as np
 import optax
 from flax.training import checkpoints
 from jax import random, tree, tree_util
-from jax.sharding import NamedSharding
-from jax.sharding import PartitionSpec as P
 from jsonargparse import auto_cli
 
 from data import Dataset, PaddedArray, load_data, save_samples
@@ -52,7 +50,6 @@ def device_put_padded_array(H: Hyperparams, data: PaddedArray) -> PaddedArray:
         raw=jax.device_put(data.raw, H.sharding_batch),
         lengths=jax.device_put(data.lengths, H.sharding_lengths),
     )
-
 
 
 def shuffle(rng, data: PaddedArray):

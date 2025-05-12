@@ -4,11 +4,11 @@ from typing import Callable, Literal, Optional
 from zlib import adler32
 
 import flax.linen as nn
-import optax
-from optax.schedules import Schedule
 import jax
+import optax
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
+from optax.schedules import Schedule
 
 
 @dataclasses.dataclass(frozen=True)
