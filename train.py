@@ -45,11 +45,22 @@ def reshape_batches(batch_size, data: PaddedArray):
     return map(PaddedArray, reshape(data.raw), reshape(data.lengths))
 
 
+def device_put(data, sharding):
+    arrays = [
+        jax.device_put(data[index], d)
+        for d, index
+        in sharding.addressable_devices_indices_map(data.shape).items()
+    ]
+    return jax.make_array_from_single_device_arrays(
+        data.shape, sharding, arrays
+    )
+
+
 def device_put_padded_array(H: Hyperparams, data: PaddedArray) -> PaddedArray:
     return dataclasses.replace(
         data,
-        raw=jax.device_put(data.raw, H.sharding_batch),
-        lengths=jax.device_put(data.lengths, H.sharding_lengths),
+        raw=device_put(data.raw, H.sharding_batch),
+        lengths=device_put(data.lengths, H.sharding_lengths),
     )
 
 
