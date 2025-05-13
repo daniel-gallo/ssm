@@ -27,6 +27,7 @@ from models import (
 from models.noname.noname import NoNameHyperparameters
 from util import safe_map
 
+jax.distributed.initialize()
 jax.config.update("jax_threefry_partitionable", True)
 flax.config.update("flax_use_orbax_checkpointing", False)
 map = safe_map
