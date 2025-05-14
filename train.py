@@ -166,7 +166,9 @@ def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
     )
 
     optimizer_state = H.optimizer.init(weights)
-    S = TrainState(weights, weights, optimizer_state, 0, rng_train)
+    # Need to cast Python scalar to array to workaround issue with device_put.
+    # See https://github.com/jax-ml/jax/discussions/14578#discussioncomment-13141589
+    S = TrainState(weights, weights, optimizer_state, np.array(0), rng_train)
     S = restore_checkpoint(H, S, override_id)
     S = jax.device_put(S, H.sharding_train_state)
     return S
