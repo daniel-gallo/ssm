@@ -34,7 +34,7 @@ class RecurrentGemmaHyperparams(Hyperparams):
                 model=recurrentgemma.Griffin(
                     griffin_config, param_dtype=jnp.bfloat16
                 ),
-                vocab=AudioVocabulary(),
+                vocab=AudioVocabulary(self.data_num_cats),
                 params=weights["params"]["model"],
                 deterministic_sampling=False,
             )
@@ -42,7 +42,7 @@ class RecurrentGemmaHyperparams(Hyperparams):
             sample = sampler(
                 input_strings=[""] * num_samples,
                 total_generation_steps=seq_len,
-                rng=rng,
+                rng=rng.copy(),
                 return_logits=True,
             ).tokens
             sample = jnp.stack([sample[i] for i in range(num_samples)])[
@@ -54,12 +54,19 @@ class RecurrentGemmaHyperparams(Hyperparams):
         return _sample_fn
 
 
-@dataclasses.dataclass
 class AudioVocabulary:
-    num_cats: int = 256
-    _bos_id: int = 128
-    _eos_id: int = 256
-    _pad_id: int = 128
+    def __init__(self, num_cats):
+        self.num_cats = num_cats
+        # TODO: use a proper BOS, not the middle category
+        if self.num_cats == 2:
+            # For MNIST, this will be black
+            self._bos_id = 0
+        else:
+            # For audio, this will be 128 (retro-compatibility with currently-running models)
+            self._bos_id = num_cats // 2
+        self._pad_id = self._bos_id
+        # Unused: the model cannot produce it
+        self._eos_id = num_cats
 
     def bos_id(self):
         return self._bos_id
@@ -124,13 +131,13 @@ class RecurrentGemma(nn.Module):
         self.model = recurrentgemma.Griffin(
             get_griffin_config(self.H), param_dtype=jnp.bfloat16
         )
+        self.vocabulary = AudioVocabulary(self.H.data_num_cats)
 
     def __call__(self, x: PaddedArray, rng=None, training=False):
         bs, seq_len, c = x.raw.shape
         assert c == 1
 
-        # TODO: use a proper BOS
-        model_input = jnp.full((bs, seq_len), 128)
+        model_input = jnp.full((bs, seq_len), self.vocabulary.bos_id())
         model_input = model_input.at[:, 1:].set(x.raw[:, :-1, 0])
         pos = jnp.repeat(jnp.arange(seq_len)[None], bs, axis=0)
         logits, _ = self.model(model_input, pos, return_cache=False)
