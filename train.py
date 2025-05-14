@@ -168,6 +168,7 @@ def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
 
     optimizer_state = H.optimizer.init(weights)
     S = TrainState(weights, weights, optimizer_state, 0, rng_train)
+    jax.device_put(S, H.sharding_train_state)
     S = restore_checkpoint(H, S, override_id)
 
     ###########################################################################
