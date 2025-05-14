@@ -11,6 +11,7 @@ import optax
 from flax.training import checkpoints
 from jax import random, tree, tree_util
 from jsonargparse import auto_cli
+from jax.experimental import multihost_utils
 
 from data import Dataset, PaddedArray, load_data, save_samples
 from hps import Hyperparams
@@ -168,6 +169,7 @@ def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
     optimizer_state = H.optimizer.init(weights)
     S = TrainState(weights, weights, optimizer_state, 0, rng_train)
     S = restore_checkpoint(H, S, override_id)
+    multihost_utils.assert_equal(S)
     S = jax.device_put(S, H.sharding_train_state)
     return S
 
