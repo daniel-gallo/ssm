@@ -40,8 +40,17 @@ class NoNameHyperparameters(Hyperparams):
         return NoName(self)
 
     @property
-    def sample_prior(self):
-        return NoName.sample_prior
+    def sample_fn(self):
+        def _sample_fn(weights, seq_len, num_samples, rng):
+            return self.model.apply(
+                weights,
+                seq_len,
+                num_samples,
+                rng,
+                method=self.model.sample_prior,
+            )
+
+        return _sample_fn
 
 
 def get_head(name: str):

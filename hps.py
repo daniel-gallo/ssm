@@ -135,5 +135,5 @@ class Hyperparams:
 
     @property
     @abstractmethod
-    def sample_prior(self) -> Callable:
+    def sample_fn(self):
         pass
