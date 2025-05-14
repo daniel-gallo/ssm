@@ -176,7 +176,7 @@ def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
 
     jax.device_put(weights, H.sharding_train_state)
     jax.device_put(optimizer_state, H.sharding_train_state)
-    jax.device_put(0, H.sharding_train_state)
+    jax.device_put(np.array(0.), H.sharding_train_state)
     jax.device_put(rng_train, H.sharding_train_state)
 
     y = device_put(jnp.ones((8,)), H.sharding_train_state)
