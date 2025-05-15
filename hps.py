@@ -60,10 +60,10 @@ class Hyperparams:
             assert batch_size % jax.device_count() == 0
             return jax.make_mesh((jax.device_count(), 1), ("batch", "seq"))
         else:
-            assert jax.device_count() % self.batch_size == 0
-            seq_shards = jax.device_count() // self.batch_size
+            assert jax.device_count() % batch_size == 0
+            seq_shards = jax.device_count() // batch_size
             return jax.make_mesh(
-                (self.batch_size, seq_shards), ("batch", "seq")
+                (batch_size, seq_shards), ("batch", "seq")
             )
 
     @property
