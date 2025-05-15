@@ -6,10 +6,10 @@ import jax.numpy as jnp
 from flax import linen as nn
 
 import models.recurrentgemma.jax as recurrentgemma
-from models.recurrentgemma.jax import ShardingSpec
 from data import PaddedArray
 from hps import Hyperparams
 from models.losses import padded_log_likelihood
+from models.recurrentgemma.jax import ShardingSpec
 
 
 @dataclasses.dataclass(frozen=True)
@@ -36,7 +36,7 @@ class RecurrentGemmaHyperparams(Hyperparams):
                     griffin_config, param_dtype=jnp.bfloat16
                 ),
                 vocab=AudioVocabulary(),
-                params=weights["params"]["model"],
+                params=weights["params"]["Griffin_0"],
                 deterministic_sampling=False,
             )
 
@@ -119,24 +119,25 @@ def get_griffin_config(H: RecurrentGemmaHyperparams):
 class RecurrentGemma(nn.Module):
     H: RecurrentGemmaHyperparams
 
-    def setup(self):
-        sharding_spec = ShardingSpec(
-            mesh=self.H._mesh,
-            batch_axis_name="batch",
-            sequence_axis_name="seq",
-        )
-        self.model = recurrentgemma.Griffin(
-            get_griffin_config(self.H), param_dtype=jnp.bfloat16,
-            scan_sharding_spec=sharding_spec,
-        )
-
+    @nn.compact
     def __call__(self, x: PaddedArray, rng=None, training=False):
         bs, seq_len, c = x.raw.shape
         assert c == 1
+
+        sharding_spec = ShardingSpec(
+            mesh=self.H._mesh(bs),
+            batch_axis_name="batch",
+            sequence_axis_name="seq",
+        )
+        model = recurrentgemma.Griffin(
+            get_griffin_config(self.H),
+            param_dtype=jnp.bfloat16,
+            scan_sharding_spec=sharding_spec,
+        )
 
         # TODO: use a proper BOS
         model_input = jnp.full((bs, seq_len), 128)
         model_input = model_input.at[:, 1:].set(x.raw[:, :-1, 0])
         pos = jnp.repeat(jnp.arange(seq_len)[None], bs, axis=0)
-        logits, _ = self.model(model_input, pos, return_cache=False)
+        logits, _ = model(model_input, pos, return_cache=False)
         return loss_and_metrics(logits, x)

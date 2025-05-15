@@ -86,7 +86,9 @@ class RGLRU(nn.Module):
             x = sqrt_bound_derivative(1 - a_squared, 200) * x
 
         sharding_spec = pallas.ShardingSpec(
-            self.H._mesh, batch_axis_name="batch", sequence_axis_name="seq"
+            self.H._mesh(batch_size),
+            batch_axis_name="batch",
+            sequence_axis_name="seq",
         )
         h, h_last = scan.linear_scan(
             x=x,

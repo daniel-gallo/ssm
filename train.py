@@ -10,6 +10,8 @@ import numpy as np
 import optax
 from flax.training import checkpoints
 from jax import random, tree, tree_util
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 from jsonargparse import auto_cli
 
 from data import Dataset, PaddedArray, load_data, save_samples
@@ -45,12 +47,28 @@ def reshape_batches(batch_size, data: PaddedArray):
     return map(PaddedArray, reshape(data.raw), reshape(data.lengths))
 
 
-def device_put_padded_array(H: Hyperparams, data: PaddedArray) -> PaddedArray:
+def device_put_padded_array(mesh, data: PaddedArray) -> PaddedArray:
     return dataclasses.replace(
         data,
-        raw=jax.device_put(data.raw, H.sharding_batch),
-        lengths=jax.device_put(data.lengths, H.sharding_lengths),
+        raw=jax.device_put(data.raw, NamedSharding(mesh, P("batch", "seq"))),
+        lengths=jax.device_put(
+            data.lengths,
+            NamedSharding(
+                mesh,
+                P(
+                    "batch",
+                ),
+            ),
+        ),
     )
+
+
+def device_put_padded_array_train(H, data):
+    return device_put_padded_array(H.mesh_train, data)
+
+
+def device_put_padded_array_eval(H, data):
+    return device_put_padded_array(H.mesh_eval, data)
 
 
 def shuffle(rng, data: PaddedArray):
@@ -159,7 +177,7 @@ def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
     # See https://github.com/jax-ml/jax/discussions/14578#discussioncomment-13141589
     S = TrainState(weights, weights, optimizer_state, np.array(0), rng_train)
     S = restore_checkpoint(H, S, override_id)
-    S = jax.device_put(S, H.sharding_train_state)
+    S = jax.device_put(S, NamedSharding(H.mesh_train, P()))
     return S
 
 
@@ -237,7 +255,7 @@ def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
 
 def train_epoch(H: Hyperparams, S: TrainState, data: PaddedArray):
     for batch in reshape_batches(H.batch_size, data):
-        batch = device_put_padded_array(H, batch)
+        batch = device_put_padded_array_train(H, batch)
         S, metrics = train_iter(H, S, batch)
         metrics = prepend_to_keys(metrics, "train/")
         metrics["lr"] = H.scheduler(S.step)
@@ -264,7 +282,7 @@ def eval(H: Hyperparams, S: TrainState, data: PaddedArray, split_name: str):
     metrics = []
     for batch in reshape_batches(H.batch_size_eval, data):
         rng, rng_iter = random.split(rng)
-        batch = device_put_padded_array(H, batch)
+        batch = device_put_padded_array_eval(H, batch)
         metrics.append(eval_iter(H, S, rng_iter, batch))
     return prepend_to_keys(accum_metrics(metrics), f"{split_name}/")
 

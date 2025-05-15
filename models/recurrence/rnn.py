@@ -3,13 +3,13 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import expit, logit
 
+from hps import Hyperparams
 from models.efficient_scan import pallas, scan
 from models.recurrence.common import (
     get_scan_implementation,
     get_sinusoidal_embeddings,
     sqrt_bound_derivative,
 )
-from hps import Hyperparams
 
 
 class RNN(nn.Module):
@@ -43,7 +43,9 @@ class RNN(nn.Module):
             x = sqrt_bound_derivative(1 - a**2, 200) * x
         a = jnp.broadcast_to(a, x.shape)
         sharding_spec = pallas.ShardingSpec(
-            self.H._mesh, batch_axis_name="batch", sequence_axis_name="seq"
+            self.H._mesh(batch_size),
+            batch_axis_name="batch",
+            sequence_axis_name="seq",
         )
         h, h_last = scan.linear_scan(
             x=x,
