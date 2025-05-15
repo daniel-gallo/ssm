@@ -57,7 +57,7 @@ class Hyperparams:
 
     def _mesh(self, batch_size):
         if batch_size >= jax.device_count():
-            assert self.batch_size % jax.device_count() == 0
+            assert batch_size % jax.device_count() == 0
             return jax.make_mesh((jax.device_count(), 1), ("batch", "seq"))
         else:
             assert jax.device_count() % self.batch_size == 0
