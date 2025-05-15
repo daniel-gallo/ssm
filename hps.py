@@ -75,10 +75,6 @@ class Hyperparams:
         return self._mesh(self.batch_size_eval)
 
     @property
-    def mesh_sample(self):
-        return self._mesh(self.num_samples_per_eval)
-
-    @property
     def data_shape(self):
         return self.data_seq_length, self.data_num_channels
 

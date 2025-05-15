@@ -10,7 +10,6 @@ import numpy as np
 import optax
 from flax.training import checkpoints
 from jax import random, tree, tree_util
-from jax.experimental.multihost_utils import global_array_to_host_local_array
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from jsonargparse import auto_cli
@@ -289,18 +288,12 @@ def eval(H: Hyperparams, S: TrainState, data: PaddedArray, split_name: str):
 
 
 def generate_samples(H: Hyperparams, S: TrainState):
-    samples_multihost = H.sample_fn(
-        S.weights_ema, H.data_seq_length, H.num_samples_per_eval, S.rng
-    )
-    # The sampling is currently replicated over devices. We could make this
-    # more efficient in future.
-    samples_local = global_array_to_host_local_array(
-        samples_multihost, H.mesh_sample, P()
-    )
     save_samples(
         H,
         S.step,
-        samples_local,
+        H.sample_fn(
+            S.weights_ema, H.data_seq_length, H.num_samples_per_eval, S.rng
+        ),
     )
 
 
