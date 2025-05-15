@@ -19,7 +19,7 @@ from scipy.io import wavfile
 from tensorflow.io import gfile
 
 from hps import Hyperparams
-from log_util import logprint
+from log_util import logprint, cast_jax_scalars
 
 
 # Container for arrays which have been padded in the sequence axis
@@ -619,6 +619,7 @@ def save_samples(H: Hyperparams, step, samples):
 
 
 def save_mnist_binarized(H: Hyperparams, step, samples):
+    step = cast_jax_scalars(step)
     batch_size, seq_length, num_channels = samples.shape
     assert seq_length == 28 * 28
     assert num_channels == 1
@@ -640,6 +641,7 @@ def save_mnist_binarized(H: Hyperparams, step, samples):
 
 
 def save_audio(H: Hyperparams, step, samples):
+    step = cast_jax_scalars(step)
     batch_size, seq_length, num_channels = samples.shape
     assert num_channels == 1
     samples = np.squeeze(samples, 2)
