@@ -92,13 +92,14 @@ class TrainState:
 
 
 def save_checkpoint(H: Hyperparams, S: TrainState):
-    logprint(H, "Saving checkpoint", step=S.step)
-    checkpoints.save_checkpoint_multiprocess(
-        H.checkpoint_dir,
-        dataclasses.asdict(S),
-        S.step,
-        H.checkpoint_prefix,
-    )
+    if jax.process_index() == 0:
+        logprint(H, "Saving checkpoint", step=S.step)
+        checkpoints.save_checkpoint(
+            H.checkpoint_dir,
+            dataclasses.asdict(S),
+            S.step,
+            H.checkpoint_prefix,
+        )
 
 
 def restore_checkpoint(
