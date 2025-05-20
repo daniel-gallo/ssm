@@ -93,6 +93,7 @@ class TrainState:
 
 def save_checkpoint(H: Hyperparams, S: TrainState):
     if jax.process_index() == 0:
+        S = jax.device_get(S)
         logprint(H, "Saving checkpoint", step=S.step)
         checkpoints.save_checkpoint(
             H.checkpoint_dir,
