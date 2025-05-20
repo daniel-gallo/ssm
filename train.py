@@ -92,7 +92,7 @@ class TrainState:
 
 
 def save_checkpoint(H: Hyperparams, S: TrainState):
-    S = global_array_to_host_local_array(S)
+    S = global_array_to_host_local_array(S, H.mesh_train, P())
     if jax.process_index() == 0:
         logprint(H, "Saving checkpoint", step=S.step)
         checkpoints.save_checkpoint(
