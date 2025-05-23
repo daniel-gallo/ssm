@@ -19,7 +19,7 @@ from scipy.io import wavfile
 from tensorflow.io import gfile
 
 from hps import Hyperparams
-from log_util import logprint, cast_jax_scalars
+from log_util import cast_jax_scalars, logprint
 
 
 # Container for arrays which have been padded in the sequence axis

@@ -62,9 +62,7 @@ class Hyperparams:
         else:
             assert jax.device_count() % batch_size == 0
             seq_shards = jax.device_count() // batch_size
-            return jax.make_mesh(
-                (batch_size, seq_shards), ("batch", "seq")
-            )
+            return jax.make_mesh((batch_size, seq_shards), ("batch", "seq"))
 
     @property
     def mesh_train(self):

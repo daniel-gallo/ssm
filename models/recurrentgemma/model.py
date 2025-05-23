@@ -142,8 +142,9 @@ class RecurrentGemma(nn.Module):
             scan_sharding_spec=sharding_spec,
         )
 
-        model_input = jnp.full((bs, seq_len),
-                               AudioVocabulary(self.H.data_num_cats).bos_id())
+        model_input = jnp.full(
+            (bs, seq_len), AudioVocabulary(self.H.data_num_cats).bos_id()
+        )
         model_input = model_input.at[:, 1:].set(x.raw[:, :-1, 0])
         pos = jnp.repeat(jnp.arange(seq_len)[None], bs, axis=0)
         logits, _ = model(model_input, pos, return_cache=False)
