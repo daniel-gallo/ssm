@@ -4,6 +4,7 @@ from typing import Callable, Literal, Optional
 from zlib import adler32
 
 import flax.linen as nn
+import jax
 import optax
 from optax.schedules import Schedule
 
@@ -53,6 +54,27 @@ class Hyperparams:
     data_baseline: Optional[int] = None
     data_num_training_samples: Optional[int] = None
     data_framerate: Optional[int] = None
+
+    def _mesh(self, batch_size):
+        if batch_size >= jax.device_count():
+            assert batch_size % jax.device_count() == 0
+            return jax.make_mesh((jax.device_count(), 1), ("batch", "seq"))
+        else:
+            assert jax.device_count() % batch_size == 0
+            seq_shards = jax.device_count() // batch_size
+            return jax.make_mesh((batch_size, seq_shards), ("batch", "seq"))
+
+    @property
+    def mesh_train(self):
+        return self._mesh(self.batch_size)
+
+    @property
+    def mesh_eval(self):
+        return self._mesh(self.batch_size_eval)
+
+    @property
+    def mesh_sample(self):
+        return self._mesh(self.num_samples_per_eval)
 
     @property
     def data_shape(self):

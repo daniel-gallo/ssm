@@ -10,7 +10,7 @@ from typing import List
 from urllib.request import urlretrieve
 
 import ffmpeg
-import jax.numpy as jnp
+import jax
 import numpy as np
 from huggingface_hub import hf_hub_download
 from jax.tree_util import register_dataclass
@@ -19,7 +19,7 @@ from scipy.io import wavfile
 from tensorflow.io import gfile
 
 from hps import Hyperparams
-from log_util import logprint
+from log_util import cast_jax_scalars, logprint
 
 
 # Container for arrays which have been padded in the sequence axis
@@ -619,30 +619,32 @@ def save_samples(H: Hyperparams, step, samples):
 
 
 def save_mnist_binarized(H: Hyperparams, step, samples):
+    step = cast_jax_scalars(step)
     batch_size, seq_length, num_channels = samples.shape
     assert seq_length == 28 * 28
     assert num_channels == 1
-    samples = jnp.squeeze(samples, 2)
+    samples = np.squeeze(samples, 2)
 
     sample_dir = Path(H.sample_dir) / H.id
     sample_dir.mkdir(parents=True, exist_ok=True)
 
-    samples = jnp.reshape(samples, (batch_size, 28, 28))
-    samples = jnp.repeat(samples, 4, 1)
-    samples = jnp.repeat(samples, 4, 2)
-    samples = jnp.astype(255 * jnp.hstack(samples), "uint8")
+    samples = np.reshape(samples, (batch_size, 28, 28))
+    samples = np.repeat(samples, 4, 1)
+    samples = np.repeat(samples, 4, 2)
+    samples = np.astype(255 * np.hstack(samples), "uint8")
     samples = Image.fromarray(np.array(samples), mode="L")
     samples.save(sample_dir / f"step-{step}.png")
-    if H.enable_wandb:
+    if H.enable_wandb and jax.process_index() == 0:
         import wandb
 
         wandb.log({"samples": wandb.Image(samples)}, step)
 
 
 def save_audio(H: Hyperparams, step, samples):
+    step = cast_jax_scalars(step)
     batch_size, seq_length, num_channels = samples.shape
     assert num_channels == 1
-    samples = jnp.squeeze(samples, 2)
+    samples = np.squeeze(samples, 2)
 
     sample_dir = Path(H.sample_dir) / H.id
     sample_dir.mkdir(parents=True, exist_ok=True)
@@ -656,7 +658,7 @@ def save_audio(H: Hyperparams, step, samples):
         np_to_wav(sample, sample_path, H.data_framerate)
         sample_filenames.append(str(sample_path))
 
-    if H.enable_wandb:
+    if H.enable_wandb and jax.process_index() == 0:
         import wandb
 
         wandb.log({"samples": [wandb.Audio(f) for f in sample_filenames]}, step)

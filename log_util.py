@@ -45,19 +45,21 @@ def logprint(H: Hyperparams, *args, **kwargs):
 
 
 def logtrain(H: Hyperparams, step, metrics):
+    step, metrics = cast_jax_scalars((step, metrics))
     early_logsteps = set(2**e for e in range(12))
 
     if int(step) in early_logsteps or not step % H.steps_per_print:
         logprint(H, step=step, **metrics)
-    if H.enable_wandb:
+    if H.enable_wandb and jax.process_index() == 0:
         import wandb
 
         wandb.log(metrics, step)
 
 
 def log(H: Hyperparams, step, metrics):
+    step, metrics = cast_jax_scalars((step, metrics))
     logprint(H, step=step, **metrics)
-    if H.enable_wandb:
+    if H.enable_wandb and jax.process_index() == 0:
         import wandb
 
         wandb.log(metrics, step)

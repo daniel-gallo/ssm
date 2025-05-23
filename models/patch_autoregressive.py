@@ -274,7 +274,7 @@ class TemporalMixingBlock(nn.Module):
             z = x
 
         z, h_prev = recurrent_block(
-            self.H.rnn,
+            self.H,
             d_hidden=self.H.rnn_hidden_size,
             d_out=dim,
         )(z, state.pop())
