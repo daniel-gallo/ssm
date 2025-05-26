@@ -296,7 +296,9 @@ def generate_samples(H: Hyperparams, S: TrainState):
         S.weights_ema, H.mesh_train, P()
     )
     samples = H.sample_fn(
-        weights_ema, H.data_seq_length, H.num_samples_per_eval,
+        weights_ema,
+        H.data_seq_length,
+        H.num_samples_per_eval,
         random.PRNGKey(0),
     )
     save_samples(

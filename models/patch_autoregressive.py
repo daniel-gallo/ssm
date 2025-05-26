@@ -518,8 +518,9 @@ class PatchARModel(nn.Module):
             )
         self.temporal_pyramid = block
 
-    def evaluate(self, x, state=None, inp_state=None, training=False,
-                 sampling=False):
+    def evaluate(
+        self, x, state=None, inp_state=None, training=False, sampling=False
+    ):
         bs, _, channels = x.shape
         state, cls_state = (
             state if state is not None else self.default_state(bs)
@@ -599,8 +600,9 @@ class PatchARModel(nn.Module):
             def fix_point(j, x):
                 segment, state, _ = x
                 prev_state = deepcopy(state)  # Possible inefficiency?
-                segment, state = self.evaluate(segment, state, inp_state,
-                                               sampling=True)
+                segment, state = self.evaluate(
+                    segment, state, inp_state, sampling=True
+                )
                 return (
                     random.categorical(loop_rng, segment, -1),
                     prev_state,

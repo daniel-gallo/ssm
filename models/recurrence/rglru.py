@@ -86,18 +86,25 @@ class RGLRU(nn.Module):
         if H_rnn.input_norm:
             x = sqrt_bound_derivative(1 - a_squared, 200) * x
 
-        sharding_spec = None if sampling else pallas.ShardingSpec(
+        sharding_spec = (
+            None
+            if sampling
+            else pallas.ShardingSpec(
                 self.H._mesh(batch_size),
                 batch_axis_name="batch",
                 sequence_axis_name="seq",
+            )
         )
         h, h_last = scan.linear_scan(
             x=x,
             a=a,
             h0=h_prev,
             reverse=self.reverse,
-            scan_type=(ScanType.LINEAR_NATIVE if sampling
-                       else get_scan_implementation(H_rnn)),
+            scan_type=(
+                ScanType.LINEAR_NATIVE
+                if sampling
+                else get_scan_implementation(H_rnn)
+            ),
             sharding_spec=sharding_spec,
             unroll=128,
         )
