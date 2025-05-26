@@ -4,6 +4,7 @@ import jax.numpy as jnp
 
 from hps import Hyperparams
 from models.efficient_scan import complex_lib, pallas, scan
+from models.efficient_scan.common import ScanType
 from models.recurrence.common import (
     BlockDiagonalLinear,
     complex_to_merged,
@@ -22,7 +23,7 @@ class RGLRU(nn.Module):
     reverse: bool = False
 
     @nn.compact
-    def __call__(self, x, h_prev=None, pos_emb=None):
+    def __call__(self, x, h_prev=None, pos_emb=None, sampling=False):
         H_rnn = self.H.rnn
         # TODO: implement BlockDiagonalLinear from RecurrentGemma
         batch_size, seq_len, d_in = x.shape
@@ -85,17 +86,25 @@ class RGLRU(nn.Module):
         if H_rnn.input_norm:
             x = sqrt_bound_derivative(1 - a_squared, 200) * x
 
-        sharding_spec = pallas.ShardingSpec(
-            self.H._mesh(batch_size),
-            batch_axis_name="batch",
-            sequence_axis_name="seq",
+        sharding_spec = (
+            None
+            if sampling
+            else pallas.ShardingSpec(
+                self.H._mesh(batch_size),
+                batch_axis_name="batch",
+                sequence_axis_name="seq",
+            )
         )
         h, h_last = scan.linear_scan(
             x=x,
             a=a,
             h0=h_prev,
             reverse=self.reverse,
-            scan_type=get_scan_implementation(H_rnn),
+            scan_type=(
+                ScanType.LINEAR_NATIVE
+                if sampling
+                else get_scan_implementation(H_rnn)
+            ),
             sharding_spec=sharding_spec,
             unroll=128,
         )
