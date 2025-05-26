@@ -66,4 +66,4 @@ nohup python train.py patch-ar \
         ['rglru','rglru','rglru','rglru','rglru','rglru','rglru','rglru']
     ]" \
     --learning_rate=0.002 \
-    --min_max_scaling=true
+    --min_max_scaling=true &> nohup.out
