@@ -26,7 +26,7 @@ if [ -d "ssm" ]; then
     cd ssm
     source venv/bin/activate
     git pull
-    pip install -r requirements.txt
+    pip install -Ur requirements.txt
 else
     # First run
     git clone git@github.com:daniel-gallo/ssm.git
@@ -43,7 +43,7 @@ else
     pip install jax[tpu]
     pip install torch --index-url https://download.pytorch.org/whl/cpu
     pip install tensorflow-cpu
-    pip install -r requirements.txt
+    pip install -Ur requirements.txt
 fi
 
 # Run train.py detached
