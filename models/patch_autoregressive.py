@@ -214,11 +214,11 @@ class ResBlock(nn.Module):
     last_scale: float = 1.0
 
     @nn.compact
-    def __call__(self, x, state=None, training=False):
+    def __call__(self, x, state=None, training=False, sampling=False):
         bs, seq_len, dim = x.shape
 
         z = nn.LayerNorm()(x) if self.H.use_norm else x
-        z, state = self.layer(z, state)
+        z, state = self.layer(z, state, sampling=sampling)
         z = nn.Dropout(self.H.dropout_rate, deterministic=not training)(z)
         z = z * self.last_scale
         return x + z, state
@@ -233,7 +233,7 @@ class MLPBlock(nn.Module):
     reduce: int = 1
 
     @nn.compact
-    def __call__(self, x, state=None):
+    def __call__(self, x, state=None, **kwargs):
         bs, seq_len, dim = x.shape
         expand = self.expand or self.H.ff_expand
         z = nn.Dense(dim * expand)(x)
@@ -252,7 +252,7 @@ class TemporalMixingBlock(nn.Module):
     H: PatchARHyperparams
 
     @nn.compact
-    def __call__(self, x, state=None):
+    def __call__(self, x, state=None, sampling=False):
         bs, seq_len, dim = x.shape
         recurrent_block = get_recurrent_block(self.H.rnn)
         kernel_size = self.H.conv_kernel_size
@@ -277,7 +277,7 @@ class TemporalMixingBlock(nn.Module):
             self.H,
             d_hidden=self.H.rnn_hidden_size,
             d_out=dim,
-        )(z, state.pop())
+        )(z, state.pop(), sampling=sampling)
         new_state.append(h_prev)
 
         if self.H.use_gating:
@@ -301,7 +301,7 @@ class ConvBlock(nn.Module):
     H: PatchARHyperparams
 
     @nn.compact
-    def __call__(self, x, state=None):
+    def __call__(self, x, state=None, **kwargs):
         bs, seq_len, dim = x.shape
         state = state if state is not None else self.default_state(bs, dim)
         kernel_size = self.H.conv_kernel_size
@@ -371,7 +371,7 @@ class SkipBlock(nn.Module):
             )
         self.up_blocks = up_blocks
 
-    def __call__(self, x, state=None, training=False):
+    def __call__(self, x, state=None, training=False, sampling=False):
         bs, _, dim = x.shape
         state, state_inner = (
             state if state is not None else self.default_state(bs, dim)
@@ -382,17 +382,17 @@ class SkipBlock(nn.Module):
         z = x
 
         for block in self.down_blocks:
-            z, h_prev = block(z, state.pop(), training)
+            z, h_prev = block(z, state.pop(), training, sampling)
             new_state.append(h_prev)
 
         z, h_prev = self.down_pool(z, state.pop())
         new_state.append(h_prev)
-        z, state_inner = self.inner_layer(z, state_inner, training)
+        z, state_inner = self.inner_layer(z, state_inner, training, sampling)
         z, h_prev = self.up_pool(z, state.pop())
         new_state.append(h_prev)
 
         for block in self.up_blocks:
-            z, h_prev = block(z, state.pop(), training)
+            z, h_prev = block(z, state.pop(), training, sampling)
             new_state.append(h_prev)
 
         match self.H.skip_residual:
@@ -435,14 +435,14 @@ class TemporalStack(nn.Module):
         self.blocks = blocks
 
     @nn.compact
-    def __call__(self, x, state=None, training=False):
+    def __call__(self, x, state=None, training=False, sampling=False):
         bs, _, dim = x.shape
         state = state if state is not None else self.default_state(bs, dim)
         state.reverse()
         new_state = []
 
         for block in self.blocks:
-            x, h_prev = block(x, state.pop(), training)
+            x, h_prev = block(x, state.pop(), training, sampling)
             new_state.append(h_prev)
 
         return x, new_state
@@ -518,7 +518,8 @@ class PatchARModel(nn.Module):
             )
         self.temporal_pyramid = block
 
-    def evaluate(self, x, state=None, inp_state=None, training=False):
+    def evaluate(self, x, state=None, inp_state=None, training=False,
+                 sampling=False):
         bs, _, channels = x.shape
         state, cls_state = (
             state if state is not None else self.default_state(bs)
@@ -549,7 +550,7 @@ class PatchARModel(nn.Module):
         if self.H.input_transform == "mlp":
             x = self.input_mlp(x)
 
-        x, state = self.temporal_pyramid(x, state, training)
+        x, state = self.temporal_pyramid(x, state, training, sampling)
 
         x = self.norm(x)
 
@@ -598,7 +599,8 @@ class PatchARModel(nn.Module):
             def fix_point(j, x):
                 segment, state, _ = x
                 prev_state = deepcopy(state)  # Possible inefficiency?
-                segment, state = self.evaluate(segment, state, inp_state)
+                segment, state = self.evaluate(segment, state, inp_state,
+                                               sampling=True)
                 return (
                     random.categorical(loop_rng, segment, -1),
                     prev_state,

@@ -292,9 +292,12 @@ def eval(H: Hyperparams, S: TrainState, data: PaddedArray, split_name: str):
 def generate_samples(H: Hyperparams, S: TrainState):
     # The sampling is currently replicated over devices. We could make this
     # more efficient in future.
-    S = global_array_to_host_local_array(S, H.mesh_train, P())
+    weights_ema = global_array_to_host_local_array(
+        S.weights_ema, H.mesh_train, P()
+    )
     samples = H.sample_fn(
-        S.weights_ema, H.data_seq_length, H.num_samples_per_eval, S.rng
+        weights_ema, H.data_seq_length, H.num_samples_per_eval,
+        random.PRNGKey(0),
     )
     save_samples(
         H,
