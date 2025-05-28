@@ -107,6 +107,7 @@ class PatchARHyperparams(Hyperparams):
     dropout_rate: float = 0.2
 
     conv_pooling: bool = False
+    simplify_pooling: bool = False
     segmented_sampling: bool = True
 
     @property
@@ -158,7 +159,13 @@ class DownPool(nn.Module):
 
     @nn.compact
     def __call__(self, x, state=None):
-        if self.H.conv_pooling:
+        if (
+            self.H.simplify_pooling
+            and self.factor == 1
+            and self.factor_feature == 1
+        ):
+            return x, None
+        elif self.H.conv_pooling:
             return nn.Conv(
                 x.shape[-1] * self.factor_feature,
                 self.factor,
@@ -186,7 +193,13 @@ class UpPool(nn.Module):
         state = state if state is not None else self.default_state(bs, dim)
         assert dim % self.factor_feature == 0
 
-        if self.H.conv_pooling:
+        if (
+            self.H.simplify_pooling
+            and self.factor == 1
+            and self.factor_feature == 1
+        ):
+            return x, None
+        elif self.H.conv_pooling:
             x = nn.Conv(
                 dim // self.factor_feature,
                 self.factor,
