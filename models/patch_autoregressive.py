@@ -94,6 +94,7 @@ class PatchARHyperparams(Hyperparams):
 
     use_norm: bool = True
     use_gating: bool = True
+    use_smart_gating_init: bool = False
     use_temporal_cnn: bool = True
     skip_residual: Literal["add", "mean", "mlp"] = "add"
     input_transform: Literal["mlp", "sine", "embed"] = "sine"
@@ -150,6 +151,13 @@ def get_block(type: str, H: PatchARHyperparams, last_scale=1.0, expand=1):
             )
         case _:
             raise ValueError(f"Unknown block type: {type}")
+
+
+def get_gating_initializer(H: PatchARHyperparams):
+    if H.use_smart_gating_init:
+        return nn.initializers.zeros
+    else:
+        return None
 
 
 class DownPool(nn.Module):
@@ -251,7 +259,9 @@ class MLPBlock(nn.Module):
         expand = self.expand or self.H.ff_expand
         z = nn.Dense(dim * expand)(x)
         if self.H.use_gating:
-            gated_x = nn.Dense(dim * expand)(x)
+            gated_x = nn.Dense(
+                dim * expand, kernel_init=get_gating_initializer(self.H)
+            )(x)
             z = z * nn.gelu(gated_x)
         else:
             z = nn.gelu(z)
@@ -294,7 +304,9 @@ class TemporalMixingBlock(nn.Module):
         new_state.append(h_prev)
 
         if self.H.use_gating:
-            gated_x = nn.Dense(dim)(x)
+            gated_x = nn.Dense(dim, kernel_init=get_gating_initializer(self.H))(
+                x
+            )
             x = z * nn.gelu(gated_x)
         else:
             x = nn.gelu(z)
@@ -329,7 +341,9 @@ class ConvBlock(nn.Module):
         )(z)
 
         if self.H.use_gating:
-            gated_x = nn.Dense(dim)(x)
+            gated_x = nn.Dense(dim, kernel_init=get_gating_initializer(self.H))(
+                x
+            )
             z = z * nn.gelu(gated_x)
         else:
             z = nn.gelu(z)
