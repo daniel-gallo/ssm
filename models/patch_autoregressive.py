@@ -157,7 +157,7 @@ def get_gating_initializer(H: PatchARHyperparams):
     if H.use_smart_gating_init:
         return nn.initializers.zeros
     else:
-        return None
+        return nn.linear.default_kernel_init
 
 
 class DownPool(nn.Module):
