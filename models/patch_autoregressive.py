@@ -69,26 +69,6 @@ class PatchARHyperparams(Hyperparams):
         ("conv", "conv", "rglru", "rglru", "rglru", "rglru"),
         ("rglru", "rglru", "rglru", "rglru", "rglru", "rglru"),
     )
-    # pool_temporal: tuple[int, ...] = (8, 8)
-    # pool_features: tuple[int, ...] = (2, 2)
-    # model_structure: tuple[tuple[str, ...], ...] = (
-    #     ("conv", "conv", "rglru", "rglru", "conv", "conv", "rglru", "rglru"),
-    #     ("conv", "conv", "rglru", "rglru", "conv", "conv", "rglru", "rglru"),
-    #     (
-    #         "conv",
-    #         "conv",
-    #         "rglru",
-    #         "rglru",
-    #         "rglru",
-    #         "conv",
-    #         "conv",
-    #         "rglru",
-    #         "rglru",
-    #         "rglru",
-    #         "rglru",
-    #         "rglru",
-    #     ),
-    # )
     unet: bool = True
     cls_head: tuple[str, ...] = ("conv", "conv")
 
@@ -96,7 +76,6 @@ class PatchARHyperparams(Hyperparams):
     use_gating: bool = True
     use_smart_gating_init: bool = False
     use_temporal_cnn: bool = True
-    skip_residual: Literal["add", "mean", "mlp"] = "add"
     input_transform: Literal["mlp", "sine", "embed"] = "sine"
 
     base_dim: int = 64
@@ -108,7 +87,6 @@ class PatchARHyperparams(Hyperparams):
     dropout_rate: float = 0.2
 
     conv_pooling: bool = False
-    simplify_pooling: bool = False
     segmented_sampling: bool = True
 
     @property
@@ -167,13 +145,7 @@ class DownPool(nn.Module):
 
     @nn.compact
     def __call__(self, x, state=None):
-        if (
-            self.H.simplify_pooling
-            and self.factor == 1
-            and self.factor_feature == 1
-        ):
-            return x, None
-        elif self.H.conv_pooling:
+        if self.H.conv_pooling:
             return nn.Conv(
                 x.shape[-1] * self.factor_feature,
                 self.factor,
@@ -201,13 +173,7 @@ class UpPool(nn.Module):
         state = state if state is not None else self.default_state(bs, dim)
         assert dim % self.factor_feature == 0
 
-        if (
-            self.H.simplify_pooling
-            and self.factor == 1
-            and self.factor_feature == 1
-        ):
-            return x, None
-        elif self.H.conv_pooling:
+        if self.H.conv_pooling:
             x = nn.Conv(
                 dim // self.factor_feature,
                 self.factor,
@@ -406,31 +372,25 @@ class SkipBlock(nn.Module):
         state.reverse()
         new_state = []
 
-        z = x
-
         for block in self.down_blocks:
-            z, h_prev = block(z, state.pop(), training, sampling)
+            x, h_prev = block(x, state.pop(), training, sampling)
             new_state.append(h_prev)
 
-        z, h_prev = self.down_pool(z, state.pop())
+        skip = x
+
+        x, h_prev = self.down_pool(x, state.pop())
         new_state.append(h_prev)
-        z, state_inner = self.inner_layer(z, state_inner, training, sampling)
-        z, h_prev = self.up_pool(z, state.pop())
+        x, state_inner = self.inner_layer(x, state_inner, training, sampling)
+        x, h_prev = self.up_pool(x, state.pop())
         new_state.append(h_prev)
+
+        x = x + skip
 
         for block in self.up_blocks:
-            z, h_prev = block(z, state.pop(), training, sampling)
+            x, h_prev = block(x, state.pop(), training, sampling)
             new_state.append(h_prev)
 
-        match self.H.skip_residual:
-            case "add":
-                return x + z, (new_state, state_inner)
-            case "mean":
-                return (x + z) / 2, (new_state, state_inner)
-            case "mlp":
-                return MLPBlock(self.H, expand=1, reduce=2)(
-                    jnp.concatenate([x, z], axis=-1)
-                ), (new_state, state_inner)
+        return x, (new_state, state_inner)
 
     def default_state(self, bs, dim):
         state = [block.default_state(bs, dim) for block in self.down_blocks]
