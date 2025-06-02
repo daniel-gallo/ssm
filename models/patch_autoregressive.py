@@ -70,7 +70,7 @@ class PatchARHyperparams(Hyperparams):
         ("rglru", "rglru", "rglru", "rglru", "rglru", "rglru"),
     )
     unet: bool = True
-    cls_head: tuple[str, ...] = ("conv", "conv")
+    cls_head: tuple[str, ...] = ()
 
     use_norm: bool = True
     use_gating: bool = True
@@ -438,11 +438,13 @@ class CLSHead(nn.Module):
     def setup(self):
         blocks = []
         for block in self.H.cls_head:
-            match self.H.cls_head:
+            match block:
                 case "conv":
                     blocks.append(ConvBlock(self.H))
                 case "mlp":
                     blocks.append(MLPBlock(self.H, expand=self.H.ff_expand))
+                case _:
+                    raise ValueError(f"Unknown block {block}")
         self.blocks = blocks
         self.final = nn.Dense(self.H.data_num_cats)
 
