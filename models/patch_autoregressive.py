@@ -74,7 +74,6 @@ class PatchARHyperparams(Hyperparams):
 
     use_norm: bool = True
     use_gating: bool = True
-    use_smart_gating_init: bool = False
     use_temporal_cnn: bool = True
     input_transform: Literal["mlp", "sine", "embed"] = "sine"
 
@@ -83,7 +82,6 @@ class PatchARHyperparams(Hyperparams):
     ff_expand: int = 2
     conv_kernel_size: int = 3
     conv_feature_group_count: int = 1
-    block_last_scale: float = 0.125
     dropout_rate: float = 0.2
 
     conv_pooling: bool = False
@@ -107,35 +105,34 @@ class PatchARHyperparams(Hyperparams):
         return _sample_fn
 
 
-def get_block(type: str, H: PatchARHyperparams, last_scale=1.0, expand=1):
+def get_block(type: str, H: PatchARHyperparams, last_layer_init_scale: float):
     match type:
         case "conv":
             return ResBlock(
                 H,
                 layer=ConvBlock(H),
-                last_scale=last_scale,
+                last_layer_init_scale=last_layer_init_scale,
             )
         case "rglru":
             return ResBlock(
                 H,
                 layer=TemporalMixingBlock(H),
-                last_scale=last_scale,
+                last_layer_init_scale=last_layer_init_scale,
             )
         case "mlp":
             return ResBlock(
                 H,
-                layer=MLPBlock(H, expand=expand),
-                last_scale=last_scale,
+                layer=MLPBlock(H),
+                last_layer_init_scale=last_layer_init_scale,
             )
         case _:
             raise ValueError(f"Unknown block type: {type}")
 
 
-def get_gating_initializer(H: PatchARHyperparams):
-    if H.use_smart_gating_init:
-        return nn.initializers.zeros
-    else:
-        return nn.linear.default_kernel_init
+def get_init(H: PatchARHyperparams, scale: float):
+    return nn.initializers.variance_scaling(
+        scale=scale, mode="fan_in", distribution="normal"
+    )
 
 
 class DownPool(nn.Module):
@@ -165,7 +162,8 @@ class DownPool(nn.Module):
 class UpPool(nn.Module):
     H: PatchARHyperparams
     factor: int
-    factor_feature: int = 1
+    factor_feature: int
+    last_layer_init_scale: float
 
     @nn.compact
     def __call__(self, x, state=None):
@@ -180,10 +178,14 @@ class UpPool(nn.Module):
                 padding=self.factor - 1,
                 input_dilation=self.factor,
                 feature_group_count=x.shape[-1],
+                kernel_init=get_init(self.H, self.last_layer_init_scale),
             )(x)
         else:
             batch_size, seq_len, dim = x.shape
-            x = nn.Dense(dim * self.factor // self.factor_feature)(x)
+            x = nn.Dense(
+                dim * self.factor // self.factor_feature,
+                kernel_init=get_init(self.H, self.last_layer_init_scale),
+            )(x)
             x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.factor)
         # ensure causal
         seq_len = x.shape[1]
@@ -198,17 +200,32 @@ class UpPool(nn.Module):
 class ResBlock(nn.Module):
     H: PatchARHyperparams
     layer: nn.Module
-    last_scale: float = 1.0
+    last_layer_init_scale: float
 
     @nn.compact
     def __call__(self, x, state=None, training=False, sampling=False):
-        bs, seq_len, dim = x.shape
+        _, _, d = x.shape
 
-        z = nn.LayerNorm()(x) if self.H.use_norm else x
-        z, state = self.layer(z, state, sampling=sampling)
-        z = nn.Dropout(self.H.dropout_rate, deterministic=not training)(z)
-        z = z * self.last_scale
-        return x + z, state
+        skip = x
+
+        x = nn.LayerNorm()(x) if self.H.use_norm else x
+
+        x_branch, state = self.layer(x, state, sampling=sampling)
+        if self.H.use_gating:
+            _, _, inner_d = x_branch.shape
+            gating_branch = nn.Dense(inner_d)(x)
+            gating_branch = nn.gelu(gating_branch)
+
+            x = x_branch * gating_branch
+        else:
+            x = nn.gelu(x_branch)
+        x = nn.Dense(
+            d, kernel_init=get_init(self.H, self.last_layer_init_scale)
+        )(x)
+
+        x = nn.Dropout(self.H.dropout_rate, deterministic=not training)(x)
+
+        return skip + x, state
 
     def default_state(self, bs, dim):
         return self.layer.default_state(bs, dim)
@@ -216,22 +233,12 @@ class ResBlock(nn.Module):
 
 class MLPBlock(nn.Module):
     H: PatchARHyperparams
-    expand: int | None = None
-    reduce: int = 1
 
     @nn.compact
     def __call__(self, x, state=None, **kwargs):
-        bs, seq_len, dim = x.shape
-        expand = self.expand or self.H.ff_expand
-        z = nn.Dense(dim * expand)(x)
-        if self.H.use_gating:
-            gated_x = nn.Dense(
-                dim * expand, kernel_init=get_gating_initializer(self.H)
-            )(x)
-            z = z * nn.gelu(gated_x)
-        else:
-            z = nn.gelu(z)
-        return nn.Dense(dim // self.reduce)(z), None
+        _, _, d = x.shape
+        x = nn.Dense(d * self.H.ff_expand)(x)
+        return x, None
 
     def default_state(self, bs, dim):
         return None
@@ -242,41 +249,32 @@ class TemporalMixingBlock(nn.Module):
 
     @nn.compact
     def __call__(self, x, state=None, sampling=False):
-        bs, seq_len, dim = x.shape
+        bs, _, dim = x.shape
         recurrent_block = get_recurrent_block(self.H.rnn)
         kernel_size = self.H.conv_kernel_size
         state = state if state is not None else self.default_state(bs, dim)
         new_state = []
 
         if self.H.use_temporal_cnn:
-            z = jnp.concatenate([state.pop(0), x], axis=1)
-            new_state.append(z[:, -(kernel_size - 1) :, :])
-            z = nn.LayerNorm()(
+            x = jnp.concatenate([state.pop(0), x], axis=1)
+            new_state.append(x[:, -(kernel_size - 1) :, :])
+            x = nn.LayerNorm()(
                 nn.Conv(
                     dim,
                     kernel_size,
                     padding="VALID",
                     feature_group_count=self.H.conv_feature_group_count,
-                )(z)
+                )(x)
             )
-        else:
-            z = x
 
-        z, h_prev = recurrent_block(
+        x, h_prev = recurrent_block(
             self.H,
             d_hidden=self.H.rnn_hidden_size,
             d_out=dim,
-        )(z, state.pop(), sampling=sampling)
+        )(x, state.pop(), sampling=sampling)
         new_state.append(h_prev)
 
-        if self.H.use_gating:
-            gated_x = nn.Dense(dim, kernel_init=get_gating_initializer(self.H))(
-                x
-            )
-            x = z * nn.gelu(gated_x)
-        else:
-            x = nn.gelu(z)
-        return nn.Dense(dim)(x), new_state
+        return x, new_state
 
     def default_state(self, bs, dim):
         kernel_size = self.H.conv_kernel_size
@@ -293,27 +291,20 @@ class ConvBlock(nn.Module):
 
     @nn.compact
     def __call__(self, x, state=None, **kwargs):
-        bs, seq_len, dim = x.shape
+        bs, _, dim = x.shape
         state = state if state is not None else self.default_state(bs, dim)
         kernel_size = self.H.conv_kernel_size
 
-        z = jnp.concatenate([state, x], axis=1)
-        state = z[:, -(kernel_size - 1) :, :]
-        z = nn.Conv(
+        x = jnp.concatenate([state, x], axis=1)
+        state = x[:, -(kernel_size - 1) :, :]
+        x = nn.Conv(
             dim,
             kernel_size,
             padding="VALID",
             feature_group_count=self.H.conv_feature_group_count,
-        )(z)
+        )(x)
 
-        if self.H.use_gating:
-            gated_x = nn.Dense(dim, kernel_init=get_gating_initializer(self.H))(
-                x
-            )
-            z = z * nn.gelu(gated_x)
-        else:
-            z = nn.gelu(z)
-        return nn.Dense(dim)(z), state
+        return x, state
 
     def default_state(self, bs, dim):
         kernel_size = self.H.conv_kernel_size
@@ -329,15 +320,23 @@ class SkipBlock(nn.Module):
 
     def setup(self):
         down_blocks = []
+
+        # MLPs and token-mixing after pooling
+        num_blocks = 2 * len(self.block_structure)
+        # MLPs and token-mixing before pooling
+        if self.H.unet:
+            num_blocks += 2 * len(self.block_structure)
+        # Inner layer
+        num_blocks += 1
+        last_layer_init_scale = 1 / num_blocks
+
         if self.H.unet:
             for block_type in self.block_structure:
                 down_blocks.append(
-                    get_block(block_type, self.H, self.H.block_last_scale)
+                    get_block(block_type, self.H, last_layer_init_scale)
                 )
                 down_blocks.append(
-                    get_block(
-                        "mlp", self.H, self.H.block_last_scale, self.H.ff_expand
-                    )
+                    get_block("mlp", self.H, last_layer_init_scale)
                 )
         self.down_blocks = down_blocks
 
@@ -350,18 +349,15 @@ class SkipBlock(nn.Module):
             self.H,
             self.pool_temporal,
             self.pool_feature,
+            last_layer_init_scale,
         )
 
         up_blocks = []
         for block_type in reversed(self.block_structure):
             up_blocks.append(
-                get_block(block_type, self.H, self.H.block_last_scale)
+                get_block(block_type, self.H, last_layer_init_scale)
             )
-            up_blocks.append(
-                get_block(
-                    "mlp", self.H, self.H.block_last_scale, self.H.ff_expand
-                )
-            )
+            up_blocks.append(get_block("mlp", self.H, last_layer_init_scale))
         self.up_blocks = up_blocks
 
     def __call__(self, x, state=None, training=False, sampling=False):
@@ -406,19 +402,16 @@ class SkipBlock(nn.Module):
 
 class TemporalStack(nn.Module):
     H: PatchARHyperparams
-    block_structure: Tuple[str] = ("rglru",)
+    block_structure: Tuple[str]
 
     def setup(self):
+        num_blocks = 2 * len(self.block_structure)
+        last_layer_init_scale = 1 / num_blocks
+
         blocks = []
         for block_type in self.block_structure:
-            blocks.append(
-                get_block(block_type, self.H, self.H.block_last_scale)
-            )
-            blocks.append(
-                get_block(
-                    "mlp", self.H, self.H.block_last_scale, self.H.ff_expand
-                )
-            )
+            blocks.append(get_block(block_type, self.H, last_layer_init_scale))
+            blocks.append(get_block("mlp", self.H, last_layer_init_scale))
         self.blocks = blocks
 
     @nn.compact
