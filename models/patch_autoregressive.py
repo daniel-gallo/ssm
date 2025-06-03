@@ -10,6 +10,7 @@ from jax import lax, random
 
 from data import PaddedArray
 from hps import Hyperparams
+from models.attention.modules import LocalAttentionBlock
 from models.recurrence import RNNHyperparams, get_recurrent_block
 
 
@@ -69,6 +70,16 @@ class PatchARHyperparams(Hyperparams):
         ("conv", "conv", "rglru", "rglru", "rglru", "rglru"),
         ("rglru", "rglru", "rglru", "rglru", "rglru", "rglru"),
     )
+    # model_structure: tuple[tuple[str, ...], ...] = (
+    #     ("conv", "conv", "rglru", "rglru"),
+    #     ("conv", "conv", "rglru", "rglru"),
+    #     ("conv", "conv", "rglru", "rglru"),
+    #     ("conv", "conv", "rglru", "rglru", "mwa"),
+    #     ("conv", "conv", "rglru", "rglru", "mwa"),
+    #     ("conv", "conv", "rglru", "rglru", "mwa", "rglru", "rglru", "mwa"),
+    #     ("rglru", "rglru", "rglru", "rglru", "mwa", "rglru", "rglru", "mwa"),
+    # )
+
     unet: bool = True
     cls_head: tuple[str, ...] = ()
 
@@ -78,11 +89,13 @@ class PatchARHyperparams(Hyperparams):
     input_transform: Literal["mlp", "sine", "embed"] = "sine"
 
     base_dim: int = 64
-    rnn_hidden_size: int = 256
     ff_expand: int = 2
     conv_kernel_size: int = 3
     conv_feature_group_count: int = 1
     dropout_rate: float = 0.2
+
+    mwa_heads: int = 4
+    mwa_window_size: int = 64
 
     conv_pooling: bool = False
     segmented_sampling: bool = True
@@ -123,6 +136,12 @@ def get_block(type: str, H: PatchARHyperparams, last_layer_init_scale: float):
             return ResBlock(
                 H,
                 layer=MLPBlock(H),
+                last_layer_init_scale=last_layer_init_scale,
+            )
+        case "mwa":
+            return ResBlock(
+                H,
+                layer=AttentionBlock(H),
                 last_layer_init_scale=last_layer_init_scale,
             )
         case _:
@@ -203,14 +222,18 @@ class ResBlock(nn.Module):
     last_layer_init_scale: float
 
     @nn.compact
-    def __call__(self, x, state=None, training=False, sampling=False):
+    def __call__(
+        self, x, segment_pos, state=None, training=False, sampling=False
+    ):
         _, _, d = x.shape
 
         skip = x
 
         x = nn.LayerNorm()(x) if self.H.use_norm else x
 
-        x_branch, state = self.layer(x, state, sampling=sampling)
+        x_branch, state = self.layer(
+            x, segment_pos=segment_pos, state=state, sampling=sampling
+        )
         if self.H.use_gating:
             _, _, inner_d = x_branch.shape
             gating_branch = nn.Dense(inner_d)(x)
@@ -311,6 +334,31 @@ class ConvBlock(nn.Module):
         return jnp.zeros((bs, kernel_size - 1, dim))
 
 
+class AttentionBlock(nn.Module):
+    H: PatchARHyperparams
+
+    @nn.compact
+    def __call__(self, x, segment_pos, state=None, **kwargs):
+        bs, seq_len, dim = x.shape
+        state = state if state is not None else self.default_state(bs, dim)
+        z, state = LocalAttentionBlock(
+            dim, self.H.mwa_heads, self.H.mwa_window_size
+        )(x, segment_pos, state)
+        if self.H.use_gating:
+            gated_x = nn.Dense(dim)(x)
+            z = z * nn.gelu(gated_x)
+        else:
+            z = nn.gelu(z)
+        return z, state
+
+    def default_state(self, bs, dim):
+        head_dim = dim // self.H.mwa_heads
+        state = LocalAttentionBlock.default_state(
+            bs, self.H.mwa_window_size, head_dim, jnp.float32
+        )
+        return state
+
+
 class SkipBlock(nn.Module):
     H: PatchARHyperparams
     inner_layer: nn.Module
@@ -360,7 +408,9 @@ class SkipBlock(nn.Module):
             up_blocks.append(get_block("mlp", self.H, last_layer_init_scale))
         self.up_blocks = up_blocks
 
-    def __call__(self, x, state=None, training=False, sampling=False):
+    def __call__(
+        self, x, segment_pos, state=None, training=False, sampling=False
+    ):
         bs, _, dim = x.shape
         state, state_inner = (
             state if state is not None else self.default_state(bs, dim)
@@ -369,21 +419,27 @@ class SkipBlock(nn.Module):
         new_state = []
 
         for block in self.down_blocks:
-            x, h_prev = block(x, state.pop(), training, sampling)
+            x, h_prev = block(x, segment_pos, state.pop(), training, sampling)
             new_state.append(h_prev)
 
         skip = x
 
         x, h_prev = self.down_pool(x, state.pop())
         new_state.append(h_prev)
-        x, state_inner = self.inner_layer(x, state_inner, training, sampling)
+        x, state_inner = self.inner_layer(
+            x,
+            segment_pos[:, :: self.pool_temporal],
+            state_inner,
+            training,
+            sampling,
+        )
         x, h_prev = self.up_pool(x, state.pop())
         new_state.append(h_prev)
 
         x = x + skip
 
         for block in self.up_blocks:
-            x, h_prev = block(x, state.pop(), training, sampling)
+            x, h_prev = block(x, segment_pos, state.pop(), training, sampling)
             new_state.append(h_prev)
 
         return x, (new_state, state_inner)
@@ -415,14 +471,16 @@ class TemporalStack(nn.Module):
         self.blocks = blocks
 
     @nn.compact
-    def __call__(self, x, state=None, training=False, sampling=False):
+    def __call__(
+        self, x, segment_pos, state=None, training=False, sampling=False
+    ):
         bs, _, dim = x.shape
         state = state if state is not None else self.default_state(bs, dim)
         state.reverse()
         new_state = []
 
         for block in self.blocks:
-            x, h_prev = block(x, state.pop(), training, sampling)
+            x, h_prev = block(x, segment_pos, state.pop(), training, sampling)
             new_state.append(h_prev)
 
         return x, new_state
@@ -448,7 +506,7 @@ class CLSHead(nn.Module):
         self.blocks = blocks
         self.final = nn.Dense(self.H.data_num_cats)
 
-    def __call__(self, x, state=None, training=False):
+    def __call__(self, x, segment_pos, state=None, training=False):
         state = (
             state
             if state is not None
@@ -458,7 +516,7 @@ class CLSHead(nn.Module):
         new_state = []
 
         for block in self.blocks:
-            x, h_prev = block(x, state.pop(), training)
+            x, h_prev = block(x, segment_pos, state.pop(), training)
             new_state.append(h_prev)
         return self.final(x), new_state
 
@@ -501,7 +559,13 @@ class PatchARModel(nn.Module):
         self.temporal_pyramid = block
 
     def evaluate(
-        self, x, state=None, inp_state=None, training=False, sampling=False
+        self,
+        x,
+        segment_pos,
+        state=None,
+        inp_state=None,
+        training=False,
+        sampling=False,
     ):
         bs, _, channels = x.shape
         state, cls_state = (
@@ -533,11 +597,13 @@ class PatchARModel(nn.Module):
         if self.H.input_transform == "mlp":
             x = self.input_mlp(x)
 
-        x, state = self.temporal_pyramid(x, state, training, sampling)
+        x, state = self.temporal_pyramid(
+            x, segment_pos, state, training, sampling
+        )
 
         x = self.norm(x)
 
-        x, cls_state = self.cls_head(x, cls_state)
+        x, cls_state = self.cls_head(x, segment_pos, cls_state)
 
         return jnp.reshape(
             x,
@@ -550,11 +616,14 @@ class PatchARModel(nn.Module):
         ), (state, cls_state)
 
     def __call__(self, x: PaddedArray, rng=None, training=False):
-        bs, _, channels = x.raw.shape
+        bs, seq_len, channels = x.raw.shape
+        segment_pos = jnp.arange(0, seq_len)[jnp.newaxis, :]
+        segment_pos = jnp.repeat(segment_pos, bs, axis=0)
         return loss_and_metrics(
             self.H,
             self.evaluate(
                 x.raw,
+                segment_pos,
                 self.default_state(bs),
                 self.default_inp_state(bs, channels),
                 training,
@@ -582,8 +651,14 @@ class PatchARModel(nn.Module):
             def fix_point(j, x):
                 segment, state, _ = x
                 prev_state = deepcopy(state)  # Possible inefficiency?
+
+                segment_pos = (
+                    jnp.arange(segment_len)[jnp.newaxis, :] + i * segment_len
+                )
+                segment_pos = jnp.repeat(segment_pos, n_samples, axis=0)
+
                 segment, state = self.evaluate(
-                    segment, state, inp_state, sampling=True
+                    segment, segment_pos, state, inp_state, sampling=True
                 )
                 return (
                     random.categorical(loop_rng, segment, -1),
