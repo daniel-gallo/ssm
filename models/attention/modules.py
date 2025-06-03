@@ -25,7 +25,7 @@ from flax import linen as nn
 from models.attention import array_typing as at
 
 _MIN_LOGITS_VALUE = -2.3819763e38  # Set to a large negative number.
-_MAX_WAVELENGTH = 10_000
+_MAX_WAVELENGTH = 32_000
 _vmap_cache_roll = jax.vmap(functools.partial(jnp.roll, axis=0))
 
 

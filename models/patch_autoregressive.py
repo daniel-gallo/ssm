@@ -60,36 +60,26 @@ class PatchARHyperparams(Hyperparams):
 
     # Model architecture
     pool_temporal: tuple[int, ...] = (2, 2, 2, 2, 2, 2)
-    pool_features: tuple[int, ...] = (1, 1, 1, 1, 1, 1)
+    pool_features: tuple[int, ...] = (1, 1, 2, 1, 1, 1)
     model_structure: tuple[tuple[str, ...], ...] = (
-        ("conv", "conv", "rglru", "rglru", "mwa"),
-        ("conv", "conv", "rglru", "rglru", "mwa"),
-        ("conv", "conv", "rglru", "rglru", "mwa"),
-        ("conv", "conv", "rglru", "rglru", "mwa"),
-        ("conv", "conv", "rglru", "rglru", "mwa"),
-        ("conv", "conv", "rglru", "rglru", "mwa", "rglru", "rglru", "mwa"),
-        ("rglru", "rglru", "rglru", "rglru", "mwa", "rglru", "rglru", "mwa"),
+        ("conv", "conv", "rglru", "rglru"),
+        ("conv", "conv", "rglru", "rglru"),
+        ("conv", "conv", "rglru", "rglru"),
+        ("conv", "conv", "rglru", "rglru"),
+        ("conv", "conv", "rglru", "rglru"),
+        ("conv", "conv", "rglru", "rglru", "rglru", "rglru"),
+        ("rglru", "rglru", "rglru", "rglru", "rglru", "rglru"),
     )
-    # pool_temporal: tuple[int, ...] = (8, 8)
-    # pool_features: tuple[int, ...] = (2, 2)
     # model_structure: tuple[tuple[str, ...], ...] = (
-    #     ("conv", "conv", "rglru", "rglru", "conv", "conv", "rglru", "rglru"),
-    #     ("conv", "conv", "rglru", "rglru", "conv", "conv", "rglru", "rglru"),
-    #     (
-    #         "conv",
-    #         "conv",
-    #         "rglru",
-    #         "rglru",
-    #         "rglru",
-    #         "conv",
-    #         "conv",
-    #         "rglru",
-    #         "rglru",
-    #         "rglru",
-    #         "rglru",
-    #         "rglru",
-    #     ),
+    #     ("conv", "conv", "rglru", "rglru"),
+    #     ("conv", "conv", "rglru", "rglru"),
+    #     ("conv", "conv", "rglru", "rglru"),
+    #     ("conv", "conv", "rglru", "rglru", "mwa"),
+    #     ("conv", "conv", "rglru", "rglru", "mwa"),
+    #     ("conv", "conv", "rglru", "rglru", "mwa", "rglru", "rglru", "mwa"),
+    #     ("rglru", "rglru", "rglru", "rglru", "mwa", "rglru", "rglru", "mwa"),
     # )
+
     unet: bool = True
     cls_head: tuple[str, ...] = ("conv", "conv")
 
@@ -97,19 +87,17 @@ class PatchARHyperparams(Hyperparams):
     use_gating: bool = True
     use_temporal_cnn: bool = True
     skip_residual: Literal["add", "mean", "mlp"] = "add"
-    input_transform: Literal["mlp", "sine", "embed"] = "sine"
+    input_transform: Literal["mlp", "sine", "embed"] = "embed"
 
     base_dim: int = 64
-    rnn_hidden_size: int = 256
     ff_expand: int = 2
     conv_kernel_size: int = 3
     conv_feature_group_count: int = 1
     block_last_scale: float = 0.125
     dropout_rate: float = 0.2
 
-    mwa_hidden_dim: int = 256
-    mwa_heads: int = 8
-    mwa_window_size: int = 256
+    mwa_heads: int = 4
+    mwa_window_size: int = 64
 
     conv_pooling: bool = False
     segmented_sampling: bool = True
@@ -244,7 +232,7 @@ class MLPBlock(nn.Module):
     reduce: int = 1
 
     @nn.compact
-    def __call__(self, segment_pos, x, state=None):
+    def __call__(self, x, segment_pos, state=None):
         bs, seq_len, dim = x.shape
         expand = self.expand or self.H.ff_expand
         z = nn.Dense(dim * expand)(x)
@@ -286,7 +274,7 @@ class TemporalMixingBlock(nn.Module):
 
         z, h_prev = recurrent_block(
             self.H.rnn,
-            d_hidden=self.H.rnn_hidden_size,
+            d_hidden=self.H.rnn.d_hidden,
             d_out=dim,
         )(z, state.pop())
         new_state.append(h_prev)
@@ -440,8 +428,8 @@ class SkipBlock(nn.Module):
                 return (x + z) / 2, (new_state, state_inner)
             case "mlp":
                 return MLPBlock(self.H, expand=1, reduce=2)(
-                    jnp.concatenate([x, z], axis=-1)
-                ), (new_state, state_inner)
+                    jnp.concatenate([x, z], axis=-1), segment_pos, state
+                )[0], (new_state, state_inner)
 
     def default_state(self, bs, dim):
         state = [block.default_state(bs, dim) for block in self.down_blocks]
@@ -642,12 +630,14 @@ class PatchARModel(nn.Module):
                 segment, state, _ = x
                 prev_state = deepcopy(state)  # Possible inefficiency?
 
-                segment_pos = jnp.arange(
-                    j * segment_len, (j + 1) * segment_len
-                )[jnp.newaxis, :]
+                segment_pos = (
+                    jnp.arange(segment_len)[jnp.newaxis, :] + i * segment_len
+                )
                 segment_pos = jnp.repeat(segment_pos, n_samples, axis=0)
 
-                segment, state = self.evaluate(segment, state, inp_state)
+                segment, state = self.evaluate(
+                    segment, segment_pos, state, inp_state
+                )
                 return (
                     random.categorical(loop_rng, segment, -1),
                     prev_state,
