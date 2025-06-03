@@ -283,7 +283,7 @@ class TemporalMixingBlock(nn.Module):
     H: PatchARHyperparams
 
     @nn.compact
-    def __call__(self, x, state=None, sampling=False):
+    def __call__(self, x, state=None, sampling=False, **kwargs):
         bs, _, dim = x.shape
         recurrent_block = get_recurrent_block(self.H.rnn)
         kernel_size = self.H.conv_kernel_size
@@ -304,7 +304,7 @@ class TemporalMixingBlock(nn.Module):
 
         x, h_prev = recurrent_block(
             self.H,
-            d_hidden=self.H.rnn_hidden_size,
+            d_hidden=self.H.rnn.d_hidden,
             d_out=dim,
         )(x, state.pop(), sampling=sampling)
         new_state.append(h_prev)
