@@ -10,6 +10,7 @@ import numpy as np
 import optax
 from flax.training import checkpoints
 from jax import random, tree, tree_util
+from jax.experimental.multihost_utils import global_array_to_host_local_array
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from jsonargparse import auto_cli
@@ -29,11 +30,10 @@ from models import (
 from models.noname.noname import NoNameHyperparameters
 from util import safe_map
 
+jax.distributed.initialize()
+jax.config.update("jax_threefry_partitionable", True)
 flax.config.update("flax_use_orbax_checkpointing", False)
 map = safe_map
-_mesh = jax.make_mesh((jax.device_count(),), ("batch",))
-SHARDING_REPLICATED = NamedSharding(_mesh, P())
-SHARDING_BATCH = NamedSharding(_mesh, P("batch"))
 
 
 def reshape_batches(batch_size, data: PaddedArray):
@@ -46,6 +46,30 @@ def reshape_batches(batch_size, data: PaddedArray):
         )
 
     return map(PaddedArray, reshape(data.raw), reshape(data.lengths))
+
+
+def device_put_padded_array(mesh, data: PaddedArray) -> PaddedArray:
+    return dataclasses.replace(
+        data,
+        raw=jax.device_put(data.raw, NamedSharding(mesh, P("batch", "seq"))),
+        lengths=jax.device_put(
+            data.lengths,
+            NamedSharding(
+                mesh,
+                P(
+                    "batch",
+                ),
+            ),
+        ),
+    )
+
+
+def device_put_padded_array_train(H, data):
+    return device_put_padded_array(H.mesh_train, data)
+
+
+def device_put_padded_array_eval(H, data):
+    return device_put_padded_array(H.mesh_eval, data)
 
 
 def shuffle(rng, data: PaddedArray):
@@ -68,13 +92,15 @@ class TrainState:
 
 
 def save_checkpoint(H: Hyperparams, S: TrainState):
-    logprint(H, "Saving checkpoint", step=S.step)
-    checkpoints.save_checkpoint(
-        H.checkpoint_dir,
-        dataclasses.asdict(S),
-        S.step,
-        H.checkpoint_prefix,
-    )
+    S = global_array_to_host_local_array(S, H.mesh_train, P())
+    if jax.process_index() == 0:
+        logprint(H, "Saving checkpoint", step=S.step)
+        checkpoints.save_checkpoint(
+            H.checkpoint_dir,
+            dataclasses.asdict(S),
+            S.step,
+            H.checkpoint_prefix,
+        )
 
 
 def restore_checkpoint(
@@ -149,9 +175,11 @@ def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
     )
 
     optimizer_state = H.optimizer.init(weights)
-    S = TrainState(weights, weights, optimizer_state, 0, rng_train)
+    # Need to cast Python scalar to array to workaround issue with device_put.
+    # See https://github.com/jax-ml/jax/discussions/14578#discussioncomment-13141589
+    S = TrainState(weights, weights, optimizer_state, np.array(0), rng_train)
     S = restore_checkpoint(H, S, override_id)
-    S = jax.device_put(S, SHARDING_REPLICATED)
+    S = jax.device_put(S, NamedSharding(H.mesh_train, P()))
     return S
 
 
@@ -229,7 +257,7 @@ def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
 
 def train_epoch(H: Hyperparams, S: TrainState, data: PaddedArray):
     for batch in reshape_batches(H.batch_size, data):
-        batch = jax.device_put(batch, SHARDING_BATCH)
+        batch = device_put_padded_array_train(H, batch)
         S, metrics = train_iter(H, S, batch)
         metrics = prepend_to_keys(metrics, "train/")
         metrics["lr"] = H.scheduler(S.step)
@@ -256,18 +284,27 @@ def eval(H: Hyperparams, S: TrainState, data: PaddedArray, split_name: str):
     metrics = []
     for batch in reshape_batches(H.batch_size_eval, data):
         rng, rng_iter = random.split(rng)
-        batch = jax.device_put(batch, SHARDING_BATCH)
+        batch = device_put_padded_array_eval(H, batch)
         metrics.append(eval_iter(H, S, rng_iter, batch))
     return prepend_to_keys(accum_metrics(metrics), f"{split_name}/")
 
 
 def generate_samples(H: Hyperparams, S: TrainState):
+    # The sampling is currently replicated over devices. We could make this
+    # more efficient in future.
+    weights_ema = global_array_to_host_local_array(
+        S.weights_ema, H.mesh_train, P()
+    )
+    samples = H.sample_fn(
+        weights_ema,
+        H.data_seq_length,
+        H.num_samples_per_eval,
+        random.PRNGKey(0),
+    )
     save_samples(
         H,
         S.step,
-        H.sample_fn(
-            S.weights_ema, H.data_seq_length, H.num_samples_per_eval, S.rng
-        ),
+        samples,
     )
 
 
@@ -304,7 +341,7 @@ def profile(H: Hyperparams, S: TrainState, data: Dataset):
     for train_step, batch in zip(
         range(3), reshape_batches(H.batch_size, data.train)
     ):
-        batch = jax.device_put(batch, SHARDING_BATCH)
+        batch = device_put_padded_array(H, batch)
         with jax.profiler.StepTraceAnnotation(
             "train_step", step_num=train_step
         ):
@@ -315,7 +352,7 @@ def profile(H: Hyperparams, S: TrainState, data: Dataset):
     for val_step, batch in zip(
         range(3), reshape_batches(H.batch_size_eval, data.val)
     ):
-        batch = jax.device_put(batch, SHARDING_BATCH)
+        batch = device_put_padded_array(H, batch)
         with jax.profiler.StepTraceAnnotation("val_step", step_num=val_step):
             metrics.append(eval_iter(H, S, S.rng, batch))
     metrics[-1]["loss"].block_until_ready()
@@ -323,7 +360,7 @@ def profile(H: Hyperparams, S: TrainState, data: Dataset):
 
 
 def log_configuration(H: Hyperparams):
-    if H.enable_wandb:
+    if H.enable_wandb and jax.process_index() == 0:
         import wandb
 
         wandb.init(
@@ -368,7 +405,7 @@ def main():
     else:
         logprint(H, "Training", id=H.id)
         train(H, S, data)
-    if H.enable_wandb:
+    if H.enable_wandb and jax.process_index() == 0:
         import wandb
 
         wandb.finish()

@@ -9,6 +9,7 @@ import models.recurrentgemma.jax as recurrentgemma
 from data import PaddedArray
 from hps import Hyperparams
 from models.losses import padded_log_likelihood
+from models.recurrentgemma.jax import ShardingSpec
 
 
 @dataclasses.dataclass(frozen=True)
@@ -35,7 +36,7 @@ class RecurrentGemmaHyperparams(Hyperparams):
                     griffin_config, param_dtype=jnp.bfloat16
                 ),
                 vocab=AudioVocabulary(self.data_num_cats),
-                params=weights["params"]["model"],
+                params=weights["params"]["Griffin_0"],
                 deterministic_sampling=False,
             )
 
@@ -119,26 +120,32 @@ def get_griffin_config(H: RecurrentGemmaHyperparams):
         embeddings_scale_by_sqrt_dim=H.embeddings_scale_by_sqrt_dim,
         attention_window_size=H.attention_window_size,
         logits_soft_cap=H.logits_soft_cap,
-        # TODO: Linear Pallas seems to interfere with the manual sharding that we do
-        scan_type=recurrentgemma.ScanType.LINEAR_NATIVE,
     )
 
 
 class RecurrentGemma(nn.Module):
     H: RecurrentGemmaHyperparams
 
-    def setup(self):
-        self.model = recurrentgemma.Griffin(
-            get_griffin_config(self.H), param_dtype=jnp.bfloat16
-        )
-        self.vocabulary = AudioVocabulary(self.H.data_num_cats)
-
+    @nn.compact
     def __call__(self, x: PaddedArray, rng=None, training=False):
         bs, seq_len, c = x.raw.shape
         assert c == 1
 
-        model_input = jnp.full((bs, seq_len), self.vocabulary.bos_id())
+        sharding_spec = ShardingSpec(
+            mesh=self.H._mesh(bs),
+            batch_axis_name="batch",
+            sequence_axis_name="seq",
+        )
+        model = recurrentgemma.Griffin(
+            get_griffin_config(self.H),
+            param_dtype=jnp.bfloat16,
+            scan_sharding_spec=sharding_spec,
+        )
+
+        model_input = jnp.full(
+            (bs, seq_len), AudioVocabulary(self.H.data_num_cats).bos_id()
+        )
         model_input = model_input.at[:, 1:].set(x.raw[:, :-1, 0])
         pos = jnp.repeat(jnp.arange(seq_len)[None], bs, axis=0)
-        logits, _ = self.model(model_input, pos, return_cache=False)
+        logits, _ = model(model_input, pos, return_cache=False)
         return loss_and_metrics(logits, x)

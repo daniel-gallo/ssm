@@ -1,5 +1,10 @@
 [![pre-commit](https://github.com/daniel-gallo/ssm/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/daniel-gallo/ssm/actions/workflows/pre-commit.yml)
 
+## Launching a job on a TPU Pod
+1. Modify `scripts/pod-script.sh` to launch the right job
+2. Change the pod name in `scripts/launch-pod-run.sh`
+3. Run `./scripts/launch-pod-run.sh`
+
 ## Profiling the model
 1. Run `train.py` with the `--profile True` flag
 2. Launch tensorboard:
@@ -20,7 +25,7 @@ tensorboard --logdir traces/
        gcloud compute tpus tpu-vm create NAME_OF_TPU --zone=ZONE \
          --accelerator-type=ACCELERATOR_TYPE --version=tpu-ubuntu2204-base \
          [--preemptible] --metadata=wandb-sweep-id=SWEEP_ID \
-         --metadata-from-file=startup-script=tpu-startup-script.sh
+         --metadata-from-file=startup-script=scripts/tpu-startup-script.sh
        ```
        Edit the sheet to show that you are using the node.
      - Attach an existing node. Firstly update the sweep id on the node, then
@@ -31,7 +36,7 @@ tensorboard --logdir traces/
            gcloud compute tpus tpu-vm update NAME_OF_TPU --zone=ZONE \
              --update-metadata=wandb-sweep-id=SWEEP_ID
            gcloud compute tpus tpu-vm update NAME_OF_TPU --zone=ZONE \
-             --metadata-from-file=startup-script=tpu-startup-script.sh
+             --metadata-from-file=startup-script=scripts/tpu-startup-script.sh
            ```
         3. Make sure there are no processes using the TPU on the node, then run
            ```bash

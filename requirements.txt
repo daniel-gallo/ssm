@@ -1,5 +1,5 @@
-jax==0.5.3
-jaxlib==0.5.3
+jax
+jaxlib
 numpy
 scipy
 jsonargparse==4.38.0
@@ -14,6 +14,6 @@ tensorflow
 soundfile
 librosa
 huggingface_hub
-jaxtyping==0.2.38
+jaxtyping
 typeguard==2.13.3
 sentencepiece # Not directly used, but it's a dependency of recurrentgemma
