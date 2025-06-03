@@ -72,7 +72,7 @@ class PatchARHyperparams(Hyperparams):
     unet: bool = True
     cls_head: tuple[str, ...] = ("conv", "conv")
 
-    use_norm: bool = True
+    norm: Literal["layer", "rms", "none"] = "layer"
     use_gating: bool = True
     use_temporal_cnn: bool = True
     input_transform: Literal["mlp", "sine", "embed"] = "sine"
@@ -133,6 +133,18 @@ def get_init(H: PatchARHyperparams, scale: float):
     return nn.initializers.variance_scaling(
         scale=scale, mode="fan_in", distribution="normal"
     )
+
+
+def get_normalization(H: PatchARHyperparams):
+    match H.norm:
+        case "layer":
+            return nn.LayerNorm()
+        case "rms":
+            return nn.RMSNorm()
+        case "none":
+            return lambda x: x
+        case _:
+            raise ValueError
 
 
 class DownPool(nn.Module):
@@ -208,7 +220,7 @@ class ResBlock(nn.Module):
 
         skip = x
 
-        x = nn.LayerNorm()(x) if self.H.use_norm else x
+        x = get_normalization(self.H)(x)
 
         x_branch, state = self.layer(x, state, sampling=sampling)
         if self.H.use_gating:
