@@ -51,19 +51,17 @@ nohup python train.py patch-ar \
     --dataset=sc09 \
     --batch_size=32 \
     --num_epochs=500 \
-    --pool_temporal="[2,2,1,1,1,1]" \
+    --pool_temporal="[2, 4, 4, 5]" \
     --base_dim=128 \
     --dropout_rate=0.2 \
     --use_temporal_cnn=false \
     --conv_pooling=true \
     --model_structure="[
-        ['rglru','rglru','rglru','rglru','rglru'],
-        ['rglru','rglru','rglru','rglru','rglru'],
-        ['rglru','rglru','rglru','rglru','rglru','rglru'],
-        ['rglru','rglru','rglru','rglru','rglru','rglru'],
-        ['rglru','rglru','rglru','rglru','rglru','rglru'],
-        ['rglru','rglru','rglru','rglru','rglru','rglru','rglru','rglru'],
-        ['rglru','rglru','rglru','rglru','rglru','rglru','rglru','rglru']
+        ['rglru','rglru','rglru','rglru'],
+        ['rglru','rglru','rglru','rglru'],
+        ['rglru','rglru','rglru','rglru'],
+        ['rglru','rglru','rglru','rglru'],
+        ['rglru','rglru','rglru','rglru'],
     ]" \
     --learning_rate=0.002 \
     --min_max_scaling=true &> nohup.out &

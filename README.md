@@ -1,9 +1,9 @@
 [![pre-commit](https://github.com/daniel-gallo/ssm/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/daniel-gallo/ssm/actions/workflows/pre-commit.yml)
 
 ## Launching a job on a TPU Pod
-1. Modify `scripts/pod-script.sh` to launch the right job
-2. Change the pod name in `scripts/launch-pod-run.sh`
-3. Run `./scripts/launch-pod-run.sh`
+1. Copy `scripts/pod-train-template.sh` to `scripts/pod-train.sh` and modify it to run the right job.
+2. (Optional) Kill existing jobs by running `./scripts/pod-run.sh <POD-NAME> pod-kill.sh`.
+3. Run `./scripts/pod-run.sh <POD-NAME> pod-train.sh`. For example, `./scripts/pod-run.sh tpu-pod-0 pod-train.sh`.
 
 ## Profiling the model
 1. Run `train.py` with the `--profile True` flag
