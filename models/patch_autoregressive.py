@@ -8,6 +8,7 @@ import jax.numpy as jnp
 from einops import rearrange
 from jax import lax, random
 import scanagram
+from scanagram import test_util
 
 from data import PaddedArray
 from hps import Hyperparams
@@ -278,7 +279,7 @@ class TemporalMixingBlock(nn.Module):
                 nn.Conv(
                     dim,
                     kernel_size,
-                    padding="CAUSAL",
+                    padding=[(kernel_size - 1, 0)],
                     feature_group_count=self.H.conv_feature_group_count,
                 )(x)
             )
@@ -529,15 +530,23 @@ class PatchARModel(nn.Module):
                 0, 1
             )
 
-        carry_init, body_fn = scanagram.as_scan(full_scan, example_result)
+        body_fn, carry_init = scanagram.as_scan(full_scan, example_result)
+        # test_util.check_scan(
+        #     full_scan,
+        #     random.randint(
+        #         random.PRNGKey(0),
+        #         (gen_len, n_samples, self.H.data_num_channels),
+        #         0, 255
+        #     )
+        # )
 
         def gen_step(x_and_carry, rng):
-            x, carry = carry
+            x, carry = x_and_carry
             carry, logits = body_fn(carry, x)
             x_next = random.categorical(rng, logits)
             return (x_next, carry), x_next
 
-        result = lax.scan(
+        _, result = lax.scan(
             gen_step,
             (jnp.zeros((n_samples, self.H.data_num_channels), "int32"),
              carry_init),
