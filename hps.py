@@ -66,7 +66,8 @@ class Hyperparams:
 
     @property
     def mesh_train(self):
-        return self._mesh(self.batch_size)
+        assert self.batch_size % self.num_minibatches == 0
+        return self._mesh(self.batch_size // self.num_minibatches)
 
     @property
     def mesh_eval(self):

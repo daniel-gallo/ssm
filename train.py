@@ -168,8 +168,10 @@ def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
     weights = jax.jit(H.model.init)(
         rng_init,
         PaddedArray(
-            jnp.zeros((H.batch_size,) + H.data_shape, "int32"),
-            jnp.zeros((H.batch_size,), "int32"),
+            jnp.zeros(
+                (H.batch_size // H.num_minibatches,) + H.data_shape, "int32"
+            ),
+            jnp.zeros((H.batch_size // H.num_minibatches,), "int32"),
         ),
         random.PRNGKey(0),
     )
@@ -210,6 +212,7 @@ def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
                 raw=batch.raw[low:high],
                 lengths=batch.lengths[low:high],
             )
+            minibatch = device_put_padded_array_train(H, minibatch)
 
             minibatch_grads, minibatch_metrics = jax.grad(
                 loss_fn, has_aux=True
@@ -257,7 +260,6 @@ def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
 
 def train_epoch(H: Hyperparams, S: TrainState, data: PaddedArray):
     for batch in reshape_batches(H.batch_size, data):
-        batch = device_put_padded_array_train(H, batch)
         S, metrics = train_iter(H, S, batch)
         metrics = prepend_to_keys(metrics, "train/")
         metrics["lr"] = H.scheduler(S.step)
