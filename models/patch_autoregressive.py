@@ -645,14 +645,14 @@ class PatchARModel(nn.Module):
 
     def sample_prior(self, gen_len, n_samples, rng):
         if self.H.segmented_sampling:
-            segment_len = jnp.prod(jnp.array(self.H.pool_temporal))
+            segment_len = jnp.prod(jnp.array(self.H.pool_temporal)).value()
             assert gen_len % segment_len == 0
         else:
             segment_len = gen_len  # recovers original, slow sampling
         num_segments = gen_len // segment_len
 
         result = jnp.zeros(
-            (n_samples, num_segments, segment_len, self.H.data_num_channels),
+            (n_samples, num_segments, segment_len, 1),
             "int32",
         )
 
