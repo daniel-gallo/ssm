@@ -18,16 +18,16 @@ from models.recurrence.common import (
 
 class RGLRU(nn.Module):
     H: Hyperparams
-    d_hidden: int
-    d_out: int
     reverse: bool = False
+    temporal_scale: int = 1  # rename
+    feature_scale: int = 1  # rename
 
     @nn.compact
     def __call__(self, x, h_prev=None, pos_emb=None, sampling=False):
         H_rnn = self.H.rnn
         # TODO: implement BlockDiagonalLinear from RecurrentGemma
         batch_size, seq_len, d_in = x.shape
-        d_hidden = self.d_hidden if H_rnn.only_real else self.d_hidden // 2
+        d_hidden = H_rnn.d_hidden if H_rnn.only_real else H_rnn.d_hidden // 2
 
         def stable_init_real(rng, shape, eps=1e-8):
             r_min, r_max = H_rnn.init_minval_real, H_rnn.init_maxval_real
@@ -37,7 +37,12 @@ class RGLRU(nn.Module):
 
         def stable_init_imag(rng, shape):
             u = jax.random.uniform(rng, shape=shape)
-            return jnp.pi * H_rnn.init_maxval_imag * u
+            scale = (
+                H_rnn.init_maxval_imag * self.temporal_scale
+                if H_rnn.adaptive_phase
+                else H_rnn.init_maxval_imag
+            )
+            return jnp.pi * scale * u
 
         a_real_param = self.param("a_real_param", stable_init_real, (d_hidden,))
         if not H_rnn.only_real:
@@ -49,19 +54,19 @@ class RGLRU(nn.Module):
             if pos_emb is None:
                 pos_emb = get_sinusoidal_embeddings(batch_size, seq_len, 16)
             x = jnp.concatenate([x, pos_emb], -1)
-        x = nn.Dense(self.d_hidden)(x)
+        x = nn.Dense(H_rnn.d_hidden)(x)
 
         gate_x = complex_lib.sigmoid(
             BlockDiagonalLinear(
                 n_blocks=H_rnn.n_diag_blocks,
-                d_input=self.d_hidden,
+                d_input=H_rnn.d_hidden,
                 d_output=d_hidden,
             )(x)
         )
         gate_a = complex_lib.sigmoid(
             BlockDiagonalLinear(
                 n_blocks=H_rnn.n_diag_blocks,
-                d_input=self.d_hidden,
+                d_input=H_rnn.d_hidden,
                 d_output=d_hidden,
             )(x)
         )
@@ -110,7 +115,8 @@ class RGLRU(nn.Module):
         )
         h = complex_to_merged(H_rnn, h)
         h_last = complex_to_merged(H_rnn, h_last)
-        return nn.Dense(self.d_out)(h), h_last
+        return nn.Dense(d_in)(h), h_last
 
     def default_state(self, batch_size):
-        return jnp.zeros((batch_size, self.d_hidden))
+        H_rnn = self.H.rnn
+        return jnp.zeros((batch_size, H_rnn.d_hidden))
