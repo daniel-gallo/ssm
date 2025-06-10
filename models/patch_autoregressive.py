@@ -1,5 +1,6 @@
 import dataclasses
 from copy import deepcopy
+from math import prod
 from typing import Literal, Tuple
 
 import flax.linen as nn
@@ -70,15 +71,6 @@ class PatchARHyperparams(Hyperparams):
         ("conv", "conv", "rglru", "rglru", "rglru", "rglru"),
         ("rglru", "rglru", "rglru", "rglru", "rglru", "rglru"),
     )
-    # model_structure: tuple[tuple[str, ...], ...] = (
-    #     ("conv", "conv", "rglru", "rglru"),
-    #     ("conv", "conv", "rglru", "rglru"),
-    #     ("conv", "conv", "rglru", "rglru"),
-    #     ("conv", "conv", "rglru", "rglru", "mwa"),
-    #     ("conv", "conv", "rglru", "rglru", "mwa"),
-    #     ("conv", "conv", "rglru", "rglru", "mwa", "rglru", "rglru", "mwa"),
-    #     ("rglru", "rglru", "rglru", "rglru", "mwa", "rglru", "rglru", "mwa"),
-    # )
 
     unet: bool = True
     cls_head: tuple[str, ...] = ()
@@ -118,7 +110,12 @@ class PatchARHyperparams(Hyperparams):
         return _sample_fn
 
 
-def get_block(type: str, H: PatchARHyperparams, last_layer_init_scale: float):
+def get_block(
+    type: str,
+    H: PatchARHyperparams,
+    depth: int,
+    last_layer_init_scale: float,
+):
     match type:
         case "conv":
             return ResBlock(
@@ -129,7 +126,7 @@ def get_block(type: str, H: PatchARHyperparams, last_layer_init_scale: float):
         case "rglru":
             return ResBlock(
                 H,
-                layer=TemporalMixingBlock(H),
+                layer=TemporalMixingBlock(H, depth=depth),
                 last_layer_init_scale=last_layer_init_scale,
             )
         case "mlp":
@@ -281,6 +278,7 @@ class MLPBlock(nn.Module):
 
 class TemporalMixingBlock(nn.Module):
     H: PatchARHyperparams
+    depth: int
 
     @nn.compact
     def __call__(self, x, state=None, sampling=False, **kwargs):
@@ -289,6 +287,9 @@ class TemporalMixingBlock(nn.Module):
         kernel_size = self.H.conv_kernel_size
         state = state if state is not None else self.default_state(bs, dim)
         new_state = []
+
+        temporal_scale = prod(self.H.pool_temporal[: self.depth])
+        feature_scale = prod(self.H.pool_features[: self.depth])
 
         if self.H.use_temporal_cnn:
             x = jnp.concatenate([state.pop(0), x], axis=1)
@@ -304,8 +305,8 @@ class TemporalMixingBlock(nn.Module):
 
         x, h_prev = recurrent_block(
             self.H,
-            d_hidden=self.H.rnn.d_hidden,
-            d_out=dim,
+            temporal_scale=temporal_scale,
+            feature_scale=feature_scale,
         )(x, state.pop(), sampling=sampling)
         new_state.append(h_prev)
 
@@ -374,9 +375,8 @@ class AttentionBlock(nn.Module):
 class SkipBlock(nn.Module):
     H: PatchARHyperparams
     inner_layer: nn.Module
-    block_structure: Tuple[str] = tuple()
-    pool_temporal: int = 1
-    pool_feature: int = 1
+    block_structure: Tuple[str]
+    depth: int
 
     def setup(self):
         down_blocks = []
@@ -390,13 +390,18 @@ class SkipBlock(nn.Module):
         num_blocks += 1
         last_layer_init_scale = 1 / num_blocks
 
+        self.pool_temporal = self.H.pool_temporal[self.depth]
+        self.pool_feature = self.H.pool_features[self.depth]
+
         if self.H.unet:
             for block_type in self.block_structure:
                 down_blocks.append(
-                    get_block(block_type, self.H, last_layer_init_scale)
+                    get_block(
+                        block_type, self.H, self.depth, last_layer_init_scale
+                    )
                 )
                 down_blocks.append(
-                    get_block("mlp", self.H, last_layer_init_scale)
+                    get_block("mlp", self.H, self.depth, last_layer_init_scale)
                 )
         self.down_blocks = down_blocks
 
@@ -415,9 +420,11 @@ class SkipBlock(nn.Module):
         up_blocks = []
         for block_type in reversed(self.block_structure):
             up_blocks.append(
-                get_block(block_type, self.H, last_layer_init_scale)
+                get_block(block_type, self.H, self.depth, last_layer_init_scale)
             )
-            up_blocks.append(get_block("mlp", self.H, last_layer_init_scale))
+            up_blocks.append(
+                get_block("mlp", self.H, self.depth, last_layer_init_scale)
+            )
         self.up_blocks = up_blocks
 
     def __call__(
@@ -471,6 +478,7 @@ class SkipBlock(nn.Module):
 class TemporalStack(nn.Module):
     H: PatchARHyperparams
     block_structure: Tuple[str]
+    depth: int
 
     def setup(self):
         num_blocks = 2 * len(self.block_structure)
@@ -478,8 +486,12 @@ class TemporalStack(nn.Module):
 
         blocks = []
         for block_type in self.block_structure:
-            blocks.append(get_block(block_type, self.H, last_layer_init_scale))
-            blocks.append(get_block("mlp", self.H, last_layer_init_scale))
+            blocks.append(
+                get_block(block_type, self.H, self.depth, last_layer_init_scale)
+            )
+            blocks.append(
+                get_block("mlp", self.H, self.depth, last_layer_init_scale)
+            )
         self.blocks = blocks
 
     @nn.compact
@@ -555,18 +567,19 @@ class PatchARModel(nn.Module):
         self.cls_head = CLSHead(self.H)
         self.norm = nn.LayerNorm()
 
-        block = TemporalStack(self.H, self.H.model_structure[-1])
-        for p_temporal, p_feature, block_structure in zip(
-            reversed(self.H.pool_temporal),
-            reversed(self.H.pool_features),
-            reversed(self.H.model_structure[:-1]),
+        total_depth = len(self.H.model_structure) - 1
+
+        block = TemporalStack(
+            self.H, self.H.model_structure[-1], depth=total_depth
+        )
+        for i, block_structure in enumerate(
+            reversed(self.H.model_structure[:-1])
         ):
             block = SkipBlock(
                 self.H,
                 block,
                 block_structure=block_structure,
-                pool_temporal=p_temporal,
-                pool_feature=p_feature,
+                depth=total_depth - i - 1,
             )
         self.temporal_pyramid = block
 
