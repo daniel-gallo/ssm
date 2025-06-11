@@ -6,7 +6,6 @@ from hps import Hyperparams
 from models.efficient_scan import complex_lib, pallas, scan
 from models.efficient_scan.common import ScanType
 from models.recurrence.common import (
-    BlockDiagonalLinear,
     complex_to_merged,
     get_scan_implementation,
     get_sinusoidal_embeddings,
@@ -79,6 +78,9 @@ class PallasLRU(nn.Module):
             log_a_complex = real_imag_complex(H_rnn, log_a, log_a_imag)
             a = complex_lib.exp(log_a_complex)
             a_squared = complex_lib.abs_squared(a)
+
+        a = jnp.broadcast_to(a, (batch_size, seq_len, d_hidden))
+        a_squared = jnp.broadcast_to(a_squared, (batch_size, seq_len, d_hidden))
 
         x = merged_to_complex(H_rnn, x)
         h_prev = (
