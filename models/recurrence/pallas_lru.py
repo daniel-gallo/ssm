@@ -16,7 +16,7 @@ from models.recurrence.common import (
 )
 
 
-class RGLRU(nn.Module):
+class PallasLRU(nn.Module):
     H: Hyperparams
     reverse: bool = False
     temporal_scale: int = 1  # rename
@@ -56,26 +56,26 @@ class RGLRU(nn.Module):
             x = jnp.concatenate([x, pos_emb], -1)
         x = nn.Dense(H_rnn.d_hidden)(x)
 
-        gate_x = complex_lib.sigmoid(
-            BlockDiagonalLinear(
-                n_blocks=H_rnn.n_diag_blocks,
-                d_input=H_rnn.d_hidden,
-                d_output=d_hidden,
-            )(x)
-        )
-        gate_a = complex_lib.sigmoid(
-            BlockDiagonalLinear(
-                n_blocks=H_rnn.n_diag_blocks,
-                d_input=H_rnn.d_hidden,
-                d_output=d_hidden,
-            )(x)
-        )
+        # gate_x = complex_lib.sigmoid(
+        #     BlockDiagonalLinear(
+        #         n_blocks=H_rnn.n_diag_blocks,
+        #         d_input=H_rnn.d_hidden,
+        #         d_output=d_hidden,
+        #     )(x)
+        # )
+        # gate_a = complex_lib.sigmoid(
+        #     BlockDiagonalLinear(
+        #         n_blocks=H_rnn.n_diag_blocks,
+        #         d_input=H_rnn.d_hidden,
+        #         d_output=d_hidden,
+        #     )(x)
+        # )
 
-        log_a = H_rnn.log_a_scale * gate_a * complex_lib.softplus(a_real_param)
+        log_a = H_rnn.log_a_scale * complex_lib.softplus(a_real_param)
         if H_rnn.only_real:
             a, a_squared = complex_lib.exp(log_a), complex_lib.exp(2 * log_a)
         else:
-            log_a_imag = a_imag_param * gate_a
+            log_a_imag = a_imag_param
             log_a_complex = real_imag_complex(H_rnn, log_a, log_a_imag)
             a = complex_lib.exp(log_a_complex)
             a_squared = complex_lib.abs_squared(a)
@@ -85,7 +85,6 @@ class RGLRU(nn.Module):
             merged_to_complex(H_rnn, h_prev) if h_prev is not None else None
         )
 
-        x = gate_x * x
         # TODO: placement of norm corresponding to RGLRU
         # reconsider doing it before gating
         if H_rnn.input_norm:
