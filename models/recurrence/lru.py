@@ -75,7 +75,9 @@ class LRU(nn.Module):
         if H_rnn.only_real:
             a, a_squared = complex_lib.exp(log_a), complex_lib.exp(2 * log_a)
         else:
-            log_a_imag = jnp.broadcast_to(a_imag_param, (batch_size, seq_len, d_hidden))
+            log_a_imag = jnp.broadcast_to(
+                a_imag_param, (batch_size, seq_len, d_hidden)
+            )
             log_a_complex = real_imag_complex(H_rnn, log_a, log_a_imag)
             a = complex_lib.exp(log_a_complex)
             a_squared = complex_lib.abs_squared(a)
