@@ -16,6 +16,7 @@ class RNNHyperparams:
     n_diag_blocks: int = 32
 
     # Parameter initialization
+    log_a_scale: float = -8.0
     init_minval_real: float = 0.9
     init_maxval_real: float = 0.99
     init_maxval_imag: float = 0.1

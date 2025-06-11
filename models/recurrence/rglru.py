@@ -71,7 +71,7 @@ class RGLRU(nn.Module):
             )(x)
         )
 
-        log_a = -8.0 * gate_a * complex_lib.softplus(a_real_param)
+        log_a = H_rnn.log_a_scale * gate_a * complex_lib.softplus(a_real_param)
         if H_rnn.only_real:
             a, a_squared = complex_lib.exp(log_a), complex_lib.exp(2 * log_a)
         else:
