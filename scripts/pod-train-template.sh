@@ -1,5 +1,6 @@
 #!/bin/bash
 
+BRANCH=${1}
 # Get credentials
 # Wandb
 curl http://metadata.google.internal/computeMetadata/v1/project/attributes/wandb_id -H "Metadata-Flavor: Google" > ~/.netrc
@@ -25,12 +26,15 @@ if [ -d "ssm" ]; then
     # Not first run, just update
     cd ssm
     source venv/bin/activate
+    git fetch
+    git switch $BRANCH
     git pull
     pip install -Ur requirements.txt
 else
     # First run
     git clone git@github.com:daniel-gallo/ssm.git
     cd ssm
+    git switch $BRANCH
     export DEBIAN_FRONTEND=noninteractive
     export NEEDRESTART_SUSPEND=1
     export NEEDRESTART_MODE=a
