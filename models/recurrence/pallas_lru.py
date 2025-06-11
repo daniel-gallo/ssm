@@ -71,16 +71,14 @@ class PallasLRU(nn.Module):
         # )
 
         log_a = H_rnn.log_a_scale * complex_lib.softplus(a_real_param)
+        log_a = jnp.broadcast_to(log_a, (batch_size, seq_len, d_hidden))
         if H_rnn.only_real:
             a, a_squared = complex_lib.exp(log_a), complex_lib.exp(2 * log_a)
         else:
-            log_a_imag = a_imag_param
+            log_a_imag = jnp.broadcast_to(a_imag_param, (batch_size, seq_len, d_hidden))
             log_a_complex = real_imag_complex(H_rnn, log_a, log_a_imag)
             a = complex_lib.exp(log_a_complex)
             a_squared = complex_lib.abs_squared(a)
-
-        a = jnp.broadcast_to(a, (batch_size, seq_len, d_hidden))
-        a_squared = jnp.broadcast_to(a_squared, (batch_size, seq_len, d_hidden))
 
         x = merged_to_complex(H_rnn, x)
         h_prev = (
