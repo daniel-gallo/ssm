@@ -19,8 +19,10 @@ from typing import Literal, NamedTuple, overload
 
 import einops
 import jax
+from jax import lax
 import jax.numpy as jnp
 from flax import linen as nn
+from scanagram import custom_scanagram, ScanInfo
 
 from models.attention import array_typing as at
 
@@ -175,7 +177,6 @@ def _compute_cache_mask(
 def _update_attention_cache(
     keys: at.Keys,
     values: at.Values,
-    segment_pos: at.SegmentPos,
     cache: AttentionBlockCache,
 ) -> AttentionBlockCache:
     """Updates the cache with the new keys and values.
@@ -183,7 +184,6 @@ def _update_attention_cache(
     Args:
       keys: The new keys to be added to the cache.
       values: The new values to be added to the cache.
-      segment_pos: Positions of each token in the sequence.
       cache: The dictionary with the cache to be updated.
 
     Returns:
@@ -203,18 +203,15 @@ def _update_attention_cache(
             num_tokens=cache.num_tokens + 1,
         )
     else:
-        # Processing a prompt in chunks.
-        return _attention_cache_from_prompt(
-            keys, values, segment_pos, window_size
-        )
+        raise NotImplementedError
 
 
 @at.typed
 def _attention_cache_from_prompt(
     keys: at.Keys,
     values: at.Values,
-    segment_pos: at.SegmentPos,
     window_size: int,
+    segment_pos: at.SegmentPos = None,
 ) -> AttentionBlockCache:
     """Creates a new cache from a prompt.
 
@@ -227,9 +224,13 @@ def _attention_cache_from_prompt(
     Returns:
       An empty initialized KV-cache updated with the given keys and values.
     """
+    b, l, n, h = keys.shape
     w = min(window_size, keys.shape[1])
     padding = [[0, 0], [0, window_size - w], [0, 0], [0, 0]]
-    num_tokens = segment_pos[:, -1] + 1
+    num_tokens = (
+        jnp.zeros(b, "int32")
+        if segment_pos is None else segment_pos[:, -1] + 1
+    )
 
     # This ensures that the keys and values are right padded in the cache.
     right_padded_keys = _vmap_cache_roll(keys[:, -w:], num_tokens)
@@ -241,6 +242,18 @@ def _attention_cache_from_prompt(
         num_tokens=num_tokens,
     )
 
+def _masked_self_attention(mask, qs, ks, vs, head_dim, dtype):
+    logits = einops.einsum(qs, ks, "b t n h, b s n h -> b n t s")
+    logits = logits * (head_dim**-0.5)
+    # Expand for heads axis.
+    attn_mask = jnp.expand_dims(mask, axis=-3)
+
+    masked_logits = jnp.where(attn_mask, logits, _MIN_LOGITS_VALUE)
+    masked_logits = masked_logits.astype(jnp.float32)
+
+    probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
+    encoded = einops.einsum(probs, vs, "b n t s, b s n h -> b t n h")
+    return encoded
 
 class LocalAttentionBlock(nn.Module):
     """Local Multi-Head Attention (MHA) block.
@@ -324,28 +337,19 @@ class LocalAttentionBlock(nn.Module):
     def __call__(
         self,
         x: at.Activations,
-        segment_pos: at.SegmentPos,
-        cache: AttentionBlockCache | None = None,
-        return_cache: Literal[True] = True,
     ) -> tuple[at.Activations, AttentionBlockCache]: ...
 
     @overload
     def __call__(
         self,
         x: at.Activations,
-        segment_pos: at.SegmentPos,
-        cache: AttentionBlockCache | None = None,
-        return_cache: Literal[False] = False,
     ) -> tuple[at.Activations, None]: ...
 
     @at.typed
     def __call__(
         self,
         x,
-        segment_pos: at.SegmentPos,
-        cache: AttentionBlockCache | None = None,
-        return_cache: bool = True,
-    ) -> tuple[at.Activations, AttentionBlockCache | None]:
+    ):
         """Calls the local attention block.
 
         Args:
@@ -359,8 +363,7 @@ class LocalAttentionBlock(nn.Module):
           than the returned updated cache is empty initialized and filled in from
           the input sequence.
         """
-        b, t, _ = x.shape
-        assert segment_pos.shape == (b, t), segment_pos.shape
+        b, t, c = x.shape
 
         # Generate keys, values and queries.
         queries = self.q(x)
@@ -373,70 +376,61 @@ class LocalAttentionBlock(nn.Module):
         values = einops.rearrange(values, "... (n h) -> ... n h", n=1)
 
         # Apply rotary embeddings.
-        queries = _apply_rope(queries, segment_pos)
-        keys = _apply_rope(keys, segment_pos)
+        positions = jnp.broadcast_to(jnp.arange(t, dtype="int32"), (b, t))
+        queries = _apply_rope(queries, positions)
+        keys = _apply_rope(keys, positions)
 
-        if cache is not None:
-            no_cache_keys, no_cache_values = keys, values
-
-            keys = jnp.concatenate([cache.keys, no_cache_keys], axis=-3)
-            values = jnp.concatenate([cache.values, no_cache_values], axis=-3)
-            attn_mask = _compute_cache_mask(
-                t, cache.num_tokens, self.window_size
+        @custom_scanagram
+        def masked_self_attention(qs_ks_vs):
+            qs, ks, vs = qs_ks_vs
+            attn_mask = _compute_forward_pass_mask(positions, self.window_size)
+            return _masked_self_attention(
+                attn_mask, qs, ks, vs, self.head_dim, x.dtype
             )
 
-            if return_cache:
-                new_cache = _update_attention_cache(
-                    no_cache_keys, no_cache_values, segment_pos, cache
-                )
-            else:
-                new_cache = None
+        @masked_self_attention.def_scanagram
+        def scan_rule(scan_info, qs_ks_vs):
+            assert scan_info.axis == 1
+            stride = scan_info.stride
+            qs, ks, vs = qs_ks_vs
+            b, l, n, h = qs.shape
 
-        else:
-            attn_mask = _compute_forward_pass_mask(
-                segment_pos, self.window_size
+            cache_init = _attention_cache_from_prompt(
+                jnp.zeros((b, 0, 1, h), ks.dtype),
+                jnp.zeros((b, 0, 1, h), vs.dtype),
+                self.window_size
             )
-
-            if return_cache:
-                new_cache = _attention_cache_from_prompt(
-                    keys, values, segment_pos, self.window_size
+            def body_fn(carry, q_k_v):
+                i, cache = carry
+                q, k, v = q_k_v
+                assert q.shape == (b, n, h)
+                assert k.shape == (b, 1, h)
+                assert v.shape == (b, 1, h)
+                q, k, v = map(
+                    functools.partial(jnp.expand_dims, axis=1), (q, k, v)
                 )
-            else:
-                new_cache = None
+                cache_new = _update_attention_cache(k, v, cache)
+                ks = jnp.concatenate([cache.keys, k], axis=-3)
+                vs = jnp.concatenate([cache.values, v], axis=-3)
+                mask = _compute_cache_mask(
+                    1, cache.num_tokens, self.window_size
+                )
+                encoded = _masked_self_attention(
+                    mask, q, ks, vs, self.head_dim, x.dtype
+                )
+                encoded = jnp.squeeze(encoded, 1)
+                cache_new, encoded = lax.cond(
+                    i % stride,
+                    lambda: (cache, jnp.zeros_like(encoded)),
+                    lambda: (cache_new, encoded)
+                )
+                return (i + 1, cache_new), encoded
+            return ScanInfo(1, stride), body_fn, (0, cache_init)
 
-        # Compute attention.
-        logits = einops.einsum(queries, keys, "b t n h, b s n h -> b n t s")
-        logits = logits * (self.head_dim**-0.5)
-        # Expand for heads axis.
-        attn_mask = jnp.expand_dims(attn_mask, axis=-3)
-
-        masked_logits = jnp.where(attn_mask, logits, _MIN_LOGITS_VALUE)
-        masked_logits = masked_logits.astype(jnp.float32)
-
-        probs = jax.nn.softmax(masked_logits, axis=-1).astype(x.dtype)
-        encoded = einops.einsum(probs, values, "b n t s, b s n h -> b t n h")
+        encoded = masked_self_attention((queries, keys, values))
         encoded = einops.rearrange(
             encoded, "... n h -> ... (n h)", n=self.num_heads
         )
         attn_output = self.out(encoded)
 
-        return attn_output, new_cache
-
-    @classmethod
-    def default_state(
-        cls,
-        batch_size: int,
-        window_size: int,
-        heads_dim: int,
-        dtype: at.dtype,
-    ) -> AttentionBlockCache:
-        """Initializes an empty KV-cache for the block."""
-        return AttentionBlockCache(
-            keys=jnp.zeros(
-                (batch_size, window_size, 1, heads_dim), dtype=dtype
-            ),
-            values=jnp.zeros(
-                (batch_size, window_size, 1, heads_dim), dtype=dtype
-            ),
-            num_tokens=jnp.zeros([batch_size], dtype=jnp.int32),
-        )
+        return attn_output
