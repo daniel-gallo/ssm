@@ -1,136 +1,123 @@
-import functools
-
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-from models.recurrence.hps import RNNHyperparams
-
-parallel_scan = jax.lax.associative_scan
-
-
-# Parallel scan operations
-@jax.vmap
-def binary_operator_diag(q_i, q_j):
-    """Binary operator for parallel scan of linear recurrence"""
-    A_i, b_i = q_i
-    A_j, b_j = q_j
-    return A_j * A_i, A_j * b_i + b_j
-
-
-def matrix_init(key, shape, dtype=jnp.float32, normalization=1):
-    return jax.random.normal(key=key, shape=shape, dtype=dtype) / normalization
-
-
-def nu_init(key, shape, r_min, r_max, dtype=jnp.float32):
-    u = jax.random.uniform(key=key, shape=shape, dtype=dtype)
-    return jnp.log(-0.5 * jnp.log(u * (r_max**2 - r_min**2) + r_min**2))
-
-
-def theta_init(key, shape, max_phase, dtype=jnp.float32):
-    u = jax.random.uniform(key, shape=shape, dtype=dtype)
-    return jnp.log(max_phase * u)
-
-
-def gamma_log_init(key, lamb):
-    nu, theta = lamb
-    diag_lambda = jnp.exp(-jnp.exp(nu) + 1j * jnp.exp(theta))
-    return jnp.log(jnp.sqrt(1 - jnp.abs(diag_lambda) ** 2))
+from hps import Hyperparams
+from models.efficient_scan import complex_lib, pallas, scan
+from models.efficient_scan.common import ScanType
+from models.recurrence.common import (
+    complex_to_merged,
+    get_scan_implementation,
+    get_sinusoidal_embeddings,
+    merged_to_complex,
+    real_imag_complex,
+    sqrt_bound_derivative,
+)
 
 
 class LRU(nn.Module):
-    """
-    LRU module in charge of the recurrent processing.
-    Implementation following the one of Orvieto et al. 2023.
-    """
-
-    H: RNNHyperparams
-    d_hidden: int  # hidden state dimension
-    d_out: int  # input and output dimensions
+    H: Hyperparams
     reverse: bool = False
-    max_phase: float = 6.28  # max phase lambda
+    temporal_scale: int = 1  # rename
+    feature_scale: int = 1  # rename
 
-    def setup(self):
-        self.input_dense = nn.Dense(self.d_out)
-        self.theta_log = self.param(
-            "theta_log",
-            functools.partial(theta_init, max_phase=self.H.init_maxval_imag),
-            (self.d_hidden,),
-        )
-        self.nu_log = self.param(
-            "nu_log",
-            functools.partial(
-                nu_init,
-                r_min=self.H.init_minval_real,
-                r_max=self.H.init_maxval_real,
-            ),
-            (self.d_hidden,),
-        )
-        self.gamma_log = self.param(
-            "gamma_log", gamma_log_init, (self.nu_log, self.theta_log)
-        )
+    @nn.compact
+    def __call__(self, x, h_prev=None, pos_emb=None, sampling=False):
+        H_rnn = self.H.rnn
+        # TODO: implement BlockDiagonalLinear from RecurrentGemma
+        batch_size, seq_len, d_in = x.shape
+        d_hidden = H_rnn.d_hidden if H_rnn.only_real else H_rnn.d_hidden // 2
 
-        # Glorot initialized Input/Output projection matrices
-        self.B_re = self.param(
-            "B_re",
-            functools.partial(
-                matrix_init, normalization=jnp.sqrt(2 * self.d_out)
-            ),
-            (self.d_hidden, self.d_out),
-        )
-        self.B_im = self.param(
-            "B_im",
-            functools.partial(
-                matrix_init, normalization=jnp.sqrt(2 * self.d_out)
-            ),
-            (self.d_hidden, self.d_out),
-        )
-        self.C_re = self.param(
-            "C_re",
-            functools.partial(
-                matrix_init, normalization=jnp.sqrt(self.d_hidden)
-            ),
-            (self.d_out, self.d_hidden),
-        )
-        self.C_im = self.param(
-            "C_im",
-            functools.partial(
-                matrix_init, normalization=jnp.sqrt(self.d_hidden)
-            ),
-            (self.d_out, self.d_hidden),
-        )
-        self.D = self.param("D", matrix_init, (self.d_out,))
+        def stable_init_real(rng, shape, eps=1e-8):
+            r_min, r_max = H_rnn.init_minval_real, H_rnn.init_maxval_real
+            u = jax.random.uniform(rng, shape=shape)
+            a_real = 0.5 * jnp.log(u * (r_max**2 - r_min**2) + r_min**2 + eps)
+            return jnp.log(jnp.exp(-a_real) - 1.0)
 
-    def __call__(self, x, h_prev=None, pos_emb=None):
-        def __inner(x):
-            """Forward pass of a LRU: h_t+1 = lambda * h_t + B x_t+1, y_t = Re[C h_t + D x_t]"""
-            diag_lambda = jnp.exp(
-                -jnp.exp(self.nu_log) + 1j * jnp.exp(self.theta_log)
+        def stable_init_imag(rng, shape):
+            u = jax.random.uniform(rng, shape=shape)
+            scale = (
+                H_rnn.init_maxval_imag * self.temporal_scale
+                if H_rnn.adaptive_phase
+                else H_rnn.init_maxval_imag
             )
-            B_norm = (self.B_re + 1j * self.B_im) * jnp.expand_dims(
-                jnp.exp(self.gamma_log), axis=-1
-            )
-            C = self.C_re + 1j * self.C_im
+            return jnp.pi * scale * u
 
-            x = self.input_dense(x)
-            Lambda_elements = jnp.repeat(
-                diag_lambda[None, ...], x.shape[0], axis=0
-            )
-            Bu_elements = jax.vmap(lambda v: B_norm @ v)(x)
-
-            # Compute hidden states
-            _, hidden_states = parallel_scan(
-                binary_operator_diag,
-                (Lambda_elements, Bu_elements),
-                reverse=self.reverse,
+        a_real_param = self.param("a_real_param", stable_init_real, (d_hidden,))
+        if not H_rnn.only_real:
+            a_imag_param = self.param(
+                "a_imag_param", stable_init_imag, (d_hidden,)
             )
 
-            # Use them to compute the output of the module
-            outputs = jax.vmap(lambda h, x: (C @ h).real + self.D * x)(
-                hidden_states, x
+        if H_rnn.pos_embedding:
+            if pos_emb is None:
+                pos_emb = get_sinusoidal_embeddings(batch_size, seq_len, 16)
+            x = jnp.concatenate([x, pos_emb], -1)
+        x = nn.Dense(H_rnn.d_hidden)(x)
+
+        # gate_x = complex_lib.sigmoid(
+        #     BlockDiagonalLinear(
+        #         n_blocks=H_rnn.n_diag_blocks,
+        #         d_input=H_rnn.d_hidden,
+        #         d_output=d_hidden,
+        #     )(x)
+        # )
+        # gate_a = complex_lib.sigmoid(
+        #     BlockDiagonalLinear(
+        #         n_blocks=H_rnn.n_diag_blocks,
+        #         d_input=H_rnn.d_hidden,
+        #         d_output=d_hidden,
+        #     )(x)
+        # )
+
+        log_a = H_rnn.log_a_scale * complex_lib.softplus(a_real_param)
+        log_a = jnp.broadcast_to(log_a, (batch_size, seq_len, d_hidden))
+        if H_rnn.only_real:
+            a, a_squared = complex_lib.exp(log_a), complex_lib.exp(2 * log_a)
+        else:
+            log_a_imag = jnp.broadcast_to(
+                a_imag_param, (batch_size, seq_len, d_hidden)
             )
+            log_a_complex = real_imag_complex(H_rnn, log_a, log_a_imag)
+            a = complex_lib.exp(log_a_complex)
+            a_squared = complex_lib.abs_squared(a)
 
-            return outputs, hidden_states[-1]
+        x = merged_to_complex(H_rnn, x)
+        h_prev = (
+            merged_to_complex(H_rnn, h_prev) if h_prev is not None else None
+        )
 
-        outputs, hidden_states = jax.vmap(__inner)(x)
-        return outputs, hidden_states
+        # TODO: placement of norm corresponding to RGLRU
+        # reconsider doing it before gating
+        if H_rnn.input_norm:
+            x = sqrt_bound_derivative(1 - a_squared, 200) * x
+
+        sharding_spec = (
+            None
+            if sampling
+            else pallas.ShardingSpec(
+                self.H._mesh(batch_size),
+                batch_axis_name="batch",
+                sequence_axis_name="seq",
+            )
+        )
+        h, h_last = scan.linear_scan(
+            x=x,
+            a=a,
+            h0=h_prev,
+            reverse=self.reverse,
+            scan_type=(
+                ScanType.LINEAR_NATIVE
+                if sampling
+                else get_scan_implementation(H_rnn)
+            ),
+            sharding_spec=sharding_spec,
+            unroll=128,
+        )
+        h = complex_to_merged(H_rnn, h)
+        h_last = complex_to_merged(H_rnn, h_last)
+        return nn.Dense(d_in)(h), h_last
+
+    def default_state(self, batch_size):
+        H_rnn = self.H.rnn
+        return jnp.zeros((batch_size, H_rnn.d_hidden))

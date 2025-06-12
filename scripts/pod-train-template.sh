@@ -1,5 +1,6 @@
 #!/bin/bash
 
+BRANCH=${1}
 # Get credentials
 # Wandb
 curl http://metadata.google.internal/computeMetadata/v1/project/attributes/wandb_id -H "Metadata-Flavor: Google" > ~/.netrc
@@ -25,12 +26,15 @@ if [ -d "ssm" ]; then
     # Not first run, just update
     cd ssm
     source venv/bin/activate
+    git fetch
+    git switch $BRANCH
     git pull
     pip install -Ur requirements.txt
 else
     # First run
     git clone git@github.com:daniel-gallo/ssm.git
     cd ssm
+    git switch $BRANCH
     export DEBIAN_FRONTEND=noninteractive
     export NEEDRESTART_SUSPEND=1
     export NEEDRESTART_MODE=a
@@ -51,19 +55,17 @@ nohup python train.py patch-ar \
     --dataset=sc09 \
     --batch_size=32 \
     --num_epochs=500 \
-    --pool_temporal="[2,2,1,1,1,1]" \
+    --pool_temporal="[2, 4, 4, 5]" \
     --base_dim=128 \
     --dropout_rate=0.2 \
     --use_temporal_cnn=false \
     --conv_pooling=true \
     --model_structure="[
-        ['rglru','rglru','rglru','rglru','rglru'],
-        ['rglru','rglru','rglru','rglru','rglru'],
-        ['rglru','rglru','rglru','rglru','rglru','rglru'],
-        ['rglru','rglru','rglru','rglru','rglru','rglru'],
-        ['rglru','rglru','rglru','rglru','rglru','rglru'],
-        ['rglru','rglru','rglru','rglru','rglru','rglru','rglru','rglru'],
-        ['rglru','rglru','rglru','rglru','rglru','rglru','rglru','rglru']
+        ['rglru','rglru','rglru','rglru'],
+        ['rglru','rglru','rglru','rglru'],
+        ['rglru','rglru','rglru','rglru'],
+        ['rglru','rglru','rglru','rglru'],
+        ['rglru','rglru','rglru','rglru'],
     ]" \
     --learning_rate=0.002 \
     --min_max_scaling=true &> nohup.out &
