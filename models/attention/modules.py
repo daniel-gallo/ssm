@@ -242,7 +242,8 @@ def _attention_cache_from_prompt(
         num_tokens=num_tokens,
     )
 
-def _masked_self_attention(mask, qs, ks, vs, head_dim, dtype):
+def _masked_self_attention(mask, qs, ks, vs, dtype):
+    _, _, _, head_dim = qs.shape
     logits = einops.einsum(qs, ks, "b t n h, b s n h -> b n t s")
     logits = logits * (head_dim**-0.5)
     # Expand for heads axis.
@@ -384,9 +385,7 @@ class LocalAttentionBlock(nn.Module):
         def masked_self_attention(qs_ks_vs):
             qs, ks, vs = qs_ks_vs
             attn_mask = _compute_forward_pass_mask(positions, self.window_size)
-            return _masked_self_attention(
-                attn_mask, qs, ks, vs, self.head_dim, x.dtype
-            )
+            return _masked_self_attention(attn_mask, qs, ks, vs, x.dtype)
 
         @masked_self_attention.def_scanagram
         def scan_rule(scan_info, qs_ks_vs):
@@ -415,9 +414,7 @@ class LocalAttentionBlock(nn.Module):
                 mask = _compute_cache_mask(
                     1, cache.num_tokens, self.window_size
                 )
-                encoded = _masked_self_attention(
-                    mask, q, ks, vs, self.head_dim, x.dtype
-                )
+                encoded = _masked_self_attention(mask, q, ks, vs, x.dtype)
                 encoded = jnp.squeeze(encoded, 1)
                 cache_new, encoded = lax.cond(
                     i % stride,
