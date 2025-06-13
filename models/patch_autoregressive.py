@@ -520,7 +520,8 @@ class PatchARModel(nn.Module):
         )
 
     def __call__(self, x: PaddedArray, rng=None, training=False):
-        x_raw = lax.pad(x.raw, 0, [[0, 0, 0], [1, -1, 0], [0, 0, 0]])
+        pad_value = jnp.zeros_like(x.raw, shape=())
+        x_raw = lax.pad(x.raw, pad_value, [[0, 0, 0], [1, -1, 0], [0, 0, 0]])
         return loss_and_metrics(
             self.H,
             self.evaluate(
