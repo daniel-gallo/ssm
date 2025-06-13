@@ -399,8 +399,6 @@ def main():
             ),
         )
 
-    generate_samples(H, S)
-    exit()
     if H.profile:
         logprint(H, "Profiling", id=H.id)
         profile(H, S, data)

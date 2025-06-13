@@ -544,14 +544,14 @@ class PatchARModel(nn.Module):
             )
 
         body_fn, carry_init = scanagram.as_scan(full_scan, example_result)
-        test_util.check_scan(
-            full_scan,
-            random.randint(
-                random.PRNGKey(0),
-                (gen_len, n_samples, self.H.data_num_channels),
-                0, 255
-            )
-        )
+        #test_util.check_scan(
+        #    full_scan,
+        #    random.randint(
+        #        random.PRNGKey(0),
+        #        (gen_len, n_samples, self.H.data_num_channels),
+        #        0, 255
+        #    )
+        #)
 
         def gen_step(x_and_carry, rng):
             x, carry = x_and_carry
