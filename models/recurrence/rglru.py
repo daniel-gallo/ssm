@@ -28,6 +28,8 @@ class RGLRU(nn.Module):
         # TODO: implement BlockDiagonalLinear from RecurrentGemma
         batch_size, seq_len, d_in = x.shape
         d_hidden = H_rnn.d_hidden if H_rnn.only_real else H_rnn.d_hidden // 2
+        if H_rnn.adaptive_d:
+            d_hidden = d_hidden * self.feature_scale
 
         def stable_init_real(rng, shape, eps=1e-8):
             r_min, r_max = H_rnn.init_minval_real, H_rnn.init_maxval_real
