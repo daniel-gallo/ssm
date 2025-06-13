@@ -314,10 +314,16 @@ class TemporalMixingBlock(nn.Module):
         return x, new_state
 
     def default_state(self, bs, dim):
-        kernel_size = self.H.conv_kernel_size
-
-        state_rnn = jnp.zeros((bs, self.H.rnn.d_hidden))
+        H_rnn = self.H.rnn
+        feature_scale = prod(self.H.pool_features[: self.depth])
+        d_hidden = (
+            H_rnn.d_hidden * feature_scale
+            if H_rnn.adaptive_d
+            else H_rnn.d_hidden
+        )
+        state_rnn = jnp.zeros((bs, d_hidden))
         if self.H.use_temporal_cnn:
+            kernel_size = self.H.conv_kernel_size
             state_cnn = jnp.zeros((bs, kernel_size - 1, dim))
             return [state_cnn, state_rnn]
         return [state_rnn]
