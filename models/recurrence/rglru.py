@@ -95,6 +95,7 @@ class RGLRU(nn.Module):
                 sequence_axis_name="seq",
             )
         )
+        print(x.shape, a.shape, h_prev.shape)
         h, h_last = scan.linear_scan(
             x=x,
             a=a,
