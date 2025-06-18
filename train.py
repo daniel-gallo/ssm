@@ -186,7 +186,9 @@ def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
 
 
 @partial(jax.jit, static_argnums=0)
-def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
+def get_minibatch_grads_and_metrics(
+    H: Hyperparams, S: TrainState, minibatch: PaddedArray, rng: jax.Array
+):
     def loss_fn(weights, minibatch, rng):
         rng_iter, rng_dropout = random.split(rng, 2)
         return H.model.apply(
@@ -197,7 +199,14 @@ def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
             rngs={"dropout": rng_dropout},
         )
 
-    def get_grads_and_metrics(weights, batch, rng, num_minibatches):
+    minibatch_grads, minibatch_metrics = jax.grad(loss_fn, has_aux=True)(
+        S.weights, minibatch, rng
+    )
+    return minibatch_grads, minibatch_metrics
+
+
+def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
+    def get_grads_and_metrics(batch, rng, num_minibatches):
         assert len(batch) % num_minibatches == 0
         minibatch_size = len(batch) // num_minibatches
 
@@ -213,10 +222,9 @@ def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
                 lengths=batch.lengths[low:high],
             )
             minibatch = device_put_padded_array_train(H, minibatch)
-
-            minibatch_grads, minibatch_metrics = jax.grad(
-                loss_fn, has_aux=True
-            )(weights, minibatch, rng_iter)
+            minibatch_grads, minibatch_metrics = (
+                get_minibatch_grads_and_metrics(H, S, minibatch, rng_iter)
+            )
 
             if grads is None:
                 grads = minibatch_grads
@@ -230,10 +238,8 @@ def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
 
         return grads, metrics
 
-    rng, rng_grads = random.split(S.rng, 2)
-    grads, metrics = get_grads_and_metrics(
-        S.weights, batch, rng_grads, H.num_minibatches
-    )
+    rng, rng_iter = random.split(S.rng, 2)
+    grads, metrics = get_grads_and_metrics(batch, rng_iter, H.num_minibatches)
     grads, skip, metrics = clip_grad(H, grads, metrics)
 
     updates, optimizer_state_new = H.optimizer.update(
