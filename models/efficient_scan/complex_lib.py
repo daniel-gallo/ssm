@@ -82,7 +82,6 @@ class Complex:
     imag: jax.Array
 
     def __post_init__(self) -> None:
-        return
         if not _is_pytree_placeholder(self.real, self.imag):
             assert self.real.shape == self.imag.shape
             assert self.real.dtype == self.imag.dtype
