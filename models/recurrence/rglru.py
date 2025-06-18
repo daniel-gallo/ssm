@@ -27,7 +27,12 @@ class RGLRU(nn.Module):
         H_rnn = self.H.rnn
         # TODO: implement BlockDiagonalLinear from RecurrentGemma
         batch_size, seq_len, d_in = x.shape
-        d_hidden = H_rnn.d_hidden if H_rnn.only_real else H_rnn.d_hidden // 2
+        d_hidden = (
+            H_rnn.d_hidden * self.feature_scale
+            if H_rnn.adaptive_d
+            else H_rnn.d_hidden
+        )
+        d_inner = d_hidden if H_rnn.only_real else d_hidden // 2
 
         def stable_init_real(rng, shape, eps=1e-8):
             r_min, r_max = H_rnn.init_minval_real, H_rnn.init_maxval_real
@@ -44,30 +49,30 @@ class RGLRU(nn.Module):
             )
             return jnp.pi * scale * u
 
-        a_real_param = self.param("a_real_param", stable_init_real, (d_hidden,))
+        a_real_param = self.param("a_real_param", stable_init_real, (d_inner,))
         if not H_rnn.only_real:
             a_imag_param = self.param(
-                "a_imag_param", stable_init_imag, (d_hidden,)
+                "a_imag_param", stable_init_imag, (d_inner,)
             )
 
         if H_rnn.pos_embedding:
             if pos_emb is None:
                 pos_emb = get_sinusoidal_embeddings(batch_size, seq_len, 16)
             x = jnp.concatenate([x, pos_emb], -1)
-        x = nn.Dense(H_rnn.d_hidden)(x)
+        x = nn.Dense(d_hidden)(x)
 
         gate_x = complex_lib.sigmoid(
             BlockDiagonalLinear(
                 n_blocks=H_rnn.n_diag_blocks,
-                d_input=H_rnn.d_hidden,
-                d_output=d_hidden,
+                d_input=d_hidden,
+                d_output=d_inner,
             )(x)
         )
         gate_a = complex_lib.sigmoid(
             BlockDiagonalLinear(
                 n_blocks=H_rnn.n_diag_blocks,
-                d_input=H_rnn.d_hidden,
-                d_output=d_hidden,
+                d_input=d_hidden,
+                d_output=d_inner,
             )(x)
         )
 
@@ -119,4 +124,9 @@ class RGLRU(nn.Module):
 
     def default_state(self, batch_size):
         H_rnn = self.H.rnn
-        return jnp.zeros((batch_size, H_rnn.d_hidden))
+        d_hidden = (
+            H_rnn.d_hidden * self.feature_scale
+            if H_rnn.adaptive_d
+            else H_rnn.d_hidden
+        )
+        return jnp.zeros((batch_size, d_hidden))

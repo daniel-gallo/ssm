@@ -26,7 +26,12 @@ class LRU(nn.Module):
         H_rnn = self.H.rnn
         # TODO: implement BlockDiagonalLinear from RecurrentGemma
         batch_size, seq_len, d_in = x.shape
-        d_hidden = H_rnn.d_hidden if H_rnn.only_real else H_rnn.d_hidden // 2
+        d_hidden = (
+            H_rnn.d_hidden * self.feature_scale
+            if H_rnn.adaptive_d
+            else H_rnn.d_hidden
+        )
+        d_inner = d_hidden if H_rnn.only_real else d_hidden // 2
 
         def stable_init_real(rng, shape, eps=1e-8):
             r_min, r_max = H_rnn.init_minval_real, H_rnn.init_maxval_real
@@ -43,17 +48,17 @@ class LRU(nn.Module):
             )
             return jnp.pi * scale * u
 
-        a_real_param = self.param("a_real_param", stable_init_real, (d_hidden,))
+        a_real_param = self.param("a_real_param", stable_init_real, (d_inner,))
         if not H_rnn.only_real:
             a_imag_param = self.param(
-                "a_imag_param", stable_init_imag, (d_hidden,)
+                "a_imag_param", stable_init_imag, (d_inner,)
             )
 
         if H_rnn.pos_embedding:
             if pos_emb is None:
                 pos_emb = get_sinusoidal_embeddings(batch_size, seq_len, 16)
             x = jnp.concatenate([x, pos_emb], -1)
-        x = nn.Dense(H_rnn.d_hidden)(x)
+        x = nn.Dense(d_hidden)(x)
 
         # gate_x = complex_lib.sigmoid(
         #     BlockDiagonalLinear(
@@ -71,12 +76,12 @@ class LRU(nn.Module):
         # )
 
         log_a = H_rnn.log_a_scale * complex_lib.softplus(a_real_param)
-        log_a = jnp.broadcast_to(log_a, (batch_size, seq_len, d_hidden))
+        log_a = jnp.broadcast_to(log_a, (batch_size, seq_len, d_inner))
         if H_rnn.only_real:
             a, a_squared = complex_lib.exp(log_a), complex_lib.exp(2 * log_a)
         else:
             log_a_imag = jnp.broadcast_to(
-                a_imag_param, (batch_size, seq_len, d_hidden)
+                a_imag_param, (batch_size, seq_len, d_inner)
             )
             log_a_complex = real_imag_complex(H_rnn, log_a, log_a_imag)
             a = complex_lib.exp(log_a_complex)
@@ -120,4 +125,9 @@ class LRU(nn.Module):
 
     def default_state(self, batch_size):
         H_rnn = self.H.rnn
-        return jnp.zeros((batch_size, H_rnn.d_hidden))
+        d_hidden = (
+            H_rnn.d_hidden * self.feature_scale
+            if H_rnn.adaptive_d
+            else H_rnn.d_hidden
+        )
+        return jnp.zeros((batch_size, d_hidden))

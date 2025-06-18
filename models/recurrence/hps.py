@@ -21,3 +21,4 @@ class RNNHyperparams:
     init_maxval_real: float = 0.99
     init_maxval_imag: float = 0.1
     adaptive_phase: bool = False
+    adaptive_d: bool = False
