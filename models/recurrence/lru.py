@@ -76,7 +76,7 @@ class LRU(nn.Module):
         # )
 
         log_a = H_rnn.log_a_scale * complex_lib.softplus(a_real_param)
-        log_a = jnp.broadcast_to(log_a, (batch_size, seq_len, d_hidden))
+        log_a = jnp.broadcast_to(log_a, (batch_size, seq_len, d_inner))
         if H_rnn.only_real:
             a, a_squared = complex_lib.exp(log_a), complex_lib.exp(2 * log_a)
         else:
