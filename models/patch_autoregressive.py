@@ -1,3 +1,4 @@
+from functools import partial
 import dataclasses
 from copy import deepcopy
 from math import prod
@@ -99,6 +100,7 @@ class PatchARHyperparams(Hyperparams):
 
     @property
     def sample_fn(self):
+        @partial(jax.jit, static_argnums=(1, 2))
         def _sample_fn(weights, seq_len, num_samples, rng):
             return self.model.apply(
                 weights,
