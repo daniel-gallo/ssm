@@ -100,17 +100,18 @@ class PatchARHyperparams(Hyperparams):
 
     @property
     def sample_fn(self):
-        @partial(jax.jit, static_argnums=(1, 2))
-        def _sample_fn(weights, seq_len, num_samples, rng):
-            return self.model.apply(
-                weights,
-                seq_len,
-                num_samples,
-                rng,
-                method=self.model.sample_prior,
-            )
+        return partial(_sample_fn, self)
 
-        return _sample_fn
+
+@partial(jax.jit, static_argnums=(0, 2, 3))
+def _sample_fn(H: PatchARHyperparams, weights, seq_len, num_samples, rng):
+    return H.model.apply(
+        weights,
+        seq_len,
+        num_samples,
+        rng,
+        method=H.model.sample_prior,
+    )
 
 
 def get_block(
