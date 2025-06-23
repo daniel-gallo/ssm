@@ -46,6 +46,7 @@ class Hyperparams:
     # Dataset
     dataset: str = "sc09"
     min_max_scaling: bool = False
+    mu_law_encoding: bool = True
     # Other useful meta-data, set automatically during data loading
     data_seq_length: Optional[int] = None
     data_num_channels: Optional[int] = None
