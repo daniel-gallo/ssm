@@ -61,20 +61,33 @@ class RGLRU(nn.Module):
             x = jnp.concatenate([x, pos_emb], -1)
         x = nn.Dense(d_hidden)(x)
 
-        gate_x = complex_lib.sigmoid(
-            BlockDiagonalLinear(
-                n_blocks=H_rnn.n_diag_blocks,
-                d_input=d_hidden,
-                d_output=d_inner,
-            )(x)
-        )
-        gate_a = complex_lib.sigmoid(
-            BlockDiagonalLinear(
-                n_blocks=H_rnn.n_diag_blocks,
-                d_input=d_hidden,
-                d_output=d_inner,
-            )(x)
-        )
+        match H_rnn.gate_x:
+            case "sigmoid":
+                gate_x = complex_lib.sigmoid(
+                    BlockDiagonalLinear(
+                        n_blocks=H_rnn.n_diag_blocks,
+                        d_input=d_hidden,
+                        d_output=d_inner,
+                    )(x)
+                )
+            case "none":
+                gate_x = jnp.ones((batch_size, seq_len, d_inner))
+            case _:
+                raise ValueError(f"Unknown gate_x: {H_rnn.gate_x}")
+
+        match H_rnn.gate_a:
+            case "sigmoid":
+                gate_a = complex_lib.sigmoid(
+                    BlockDiagonalLinear(
+                        n_blocks=H_rnn.n_diag_blocks,
+                        d_input=d_hidden,
+                        d_output=d_inner,
+                    )(x)
+                )
+            case "none":
+                gate_a = jnp.ones((batch_size, seq_len, d_inner))
+            case _:
+                raise ValueError(f"Unknown gate_a: {H_rnn.gate_a}")
 
         log_a = H_rnn.log_a_scale * gate_a * complex_lib.softplus(a_real_param)
         if H_rnn.only_real:

@@ -13,7 +13,6 @@ class RNNHyperparams:
     only_real: bool = False
     input_norm: bool = True
     pos_embedding: bool = False
-    n_diag_blocks: int = 32
 
     # Parameter initialization
     log_a_scale: float = -8.0
@@ -24,5 +23,6 @@ class RNNHyperparams:
     adaptive_d: bool = False
 
     # Gating mechanisms used
-    use_gate_x: bool = True
-    use_gate_a: bool = True
+    n_diag_blocks: int = 32
+    gate_x: Literal["sigmoid", "none"] = "sigmoid"
+    gate_a: Literal["sigmoid", "none"] = "sigmoid"
