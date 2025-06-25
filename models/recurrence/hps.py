@@ -4,7 +4,7 @@ from typing import Literal
 
 @dataclasses.dataclass(frozen=True)
 class RNNHyperparams:
-    block_type: Literal["rnn", "lru", "rglru"] = "rglru"
+    block_type: Literal["rnn", "lru", "old_lru", "rglru"] = "rglru"
     scan_implementation: Literal[
         "linear_pallas", "linear_native", "associative_native"
     ] = "linear_pallas"
@@ -22,3 +22,7 @@ class RNNHyperparams:
     init_maxval_imag: float = 0.1
     adaptive_phase: bool = False
     adaptive_d: bool = False
+
+    # Gating mechanisms used
+    use_gate_x: bool = True
+    use_gate_a: bool = True

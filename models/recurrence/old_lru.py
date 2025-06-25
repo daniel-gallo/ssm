@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from models.recurrence.hps import RNNHyperparams
+from hps import Hyperparams
 
 parallel_scan = jax.lax.associative_scan
 
@@ -38,31 +39,42 @@ def gamma_log_init(key, lamb):
     return jnp.log(jnp.sqrt(1 - jnp.abs(diag_lambda) ** 2))
 
 
-class LRU(nn.Module):
+class OldLRU(nn.Module):
     """
     LRU module in charge of the recurrent processing.
     Implementation following the one of Orvieto et al. 2023.
     """
 
-    H: RNNHyperparams
-    d_hidden: int  # hidden state dimension
-    d_out: int  # input and output dimensions
+    H: Hyperparams
+    # d_hidden: int  # hidden state dimension
+    # d_out: int  # input and output dimensions
+    # reverse: bool = False
+    # max_phase: float = 6.28  # max phase lambda
     reverse: bool = False
-    max_phase: float = 6.28  # max phase lambda
+    temporal_scale: int = 1  # rename
+    feature_scale: int = 1  # rename
 
     def setup(self):
+        H_rnn = self.H.rnn
+        self.d_out = self.H.base_dim * self.feature_scale
+        d_hidden = (
+            H_rnn.d_hidden * self.feature_scale
+            if H_rnn.adaptive_d
+            else H_rnn.d_hidden
+        )
+        self.d_hidden = d_hidden if H_rnn.only_real else d_hidden // 2
         self.input_dense = nn.Dense(self.d_out)
         self.theta_log = self.param(
             "theta_log",
-            functools.partial(theta_init, max_phase=self.H.init_maxval_imag),
+            functools.partial(theta_init, max_phase=H_rnn.init_maxval_imag),
             (self.d_hidden,),
         )
         self.nu_log = self.param(
             "nu_log",
             functools.partial(
                 nu_init,
-                r_min=self.H.init_minval_real,
-                r_max=self.H.init_maxval_real,
+                r_min=H_rnn.init_minval_real,
+                r_max=H_rnn.init_maxval_real,
             ),
             (self.d_hidden,),
         )
@@ -101,7 +113,7 @@ class LRU(nn.Module):
         )
         self.D = self.param("D", matrix_init, (self.d_out,))
 
-    def __call__(self, x, h_prev=None, pos_emb=None):
+    def __call__(self, x, h_prev=None, pos_emb=None, sampling=False):
         def __inner(x):
             """Forward pass of a LRU: h_t+1 = lambda * h_t + B x_t+1, y_t = Re[C h_t + D x_t]"""
             diag_lambda = jnp.exp(

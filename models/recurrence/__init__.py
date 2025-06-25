@@ -2,6 +2,7 @@ import flax.linen as nn
 
 from models.recurrence.hps import RNNHyperparams
 from models.recurrence.lru import LRU
+from models.recurrence.old_lru import OldLRU
 from models.recurrence.rglru import RGLRU
 from models.recurrence.rnn import RNN
 
@@ -14,6 +15,8 @@ def get_recurrent_block(H: RNNHyperparams):
             return RGLRU
         case "lru":
             return LRU
+        case "old_lru":
+            return OldLRU
         case _:
             raise ValueError(f"Unknown reccurent block type: {H.block_type}")
 
