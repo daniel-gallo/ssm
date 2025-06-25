@@ -204,6 +204,14 @@ def mu_law_encode(audio):
     return quantized
 
 
+def linear_encode(audio):
+    # [-1, 1] -> [0, 1]
+    audio = audio / 2 + 0.5
+    # [0, 1] -> [0, 255]
+    audio = np.clip(audio * 256, 0, 255)
+    return audio
+
+
 def mu_law_decode(x):
     # See https://en.wikipedia.org/wiki/%CE%9C-law_algorithm
     # [0, 255] -> [0, 1]
@@ -217,6 +225,17 @@ def mu_law_decode(x):
     x = (x + 1) / 2
     # [0, 1] -> [-2**15, 2**15 - 1]
     x = (x * 65_536 - 32_768).astype(np.int16)
+    return x
+
+
+def linear_decode(x):
+    # [0, 255] -> [0, 1]
+    x = x / 255
+    # [0, 1] -> [-1, 1]
+    x = x * 2 - 1
+    # [-1, 1] -> [-2**15 - 1, 2**15 - 1]
+    x = x * 32_767
+    x = x.astype(np.int16)
     return x
 
 
@@ -265,9 +284,14 @@ def load_audio(
         val = val / 2**15
         test = test / 2**15
 
-    train = mu_law_encode(train).astype(np.int16)
-    val = mu_law_encode(val).astype(np.int16)
-    test = mu_law_encode(test).astype(np.int16)
+    if H.mu_law_encoding:
+        train = mu_law_encode(train).astype(np.int16)
+        val = mu_law_encode(val).astype(np.int16)
+        test = mu_law_encode(test).astype(np.int16)
+    else:
+        train = linear_encode(train).astype(np.int16)
+        val = linear_encode(val).astype(np.int16)
+        test = linear_encode(test).astype(np.int16)
 
     # Add a dummy channel dim
     train = train[:, :, np.newaxis]
@@ -650,7 +674,10 @@ def save_audio(H: Hyperparams, step, samples):
     sample_dir.mkdir(parents=True, exist_ok=True)
 
     # [0, 255] -> [-2**15, 2**15 - 1]
-    samples = mu_law_decode(samples)
+    if H.mu_law_encoding:
+        samples = mu_law_decode(samples)
+    else:
+        samples = linear_decode(samples)
 
     sample_filenames = []
     for sample_id, sample in enumerate(samples):
