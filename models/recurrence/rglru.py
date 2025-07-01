@@ -70,6 +70,12 @@ class RGLRU(nn.Module):
                         d_output=d_inner,
                     )(x)
                 )
+            case "mlp":
+                gate_x = BlockDiagonalLinear(
+                    n_blocks=H_rnn.n_diag_blocks,
+                    d_input=d_hidden,
+                    d_output=d_inner,
+                )(x)
             case "none":
                 gate_x = jnp.ones((batch_size, seq_len, d_inner))
             case _:
@@ -84,6 +90,12 @@ class RGLRU(nn.Module):
                         d_output=d_inner,
                     )(x)
                 )
+            case "mlp":
+                gate_a = BlockDiagonalLinear(
+                    n_blocks=H_rnn.n_diag_blocks,
+                    d_input=d_hidden,
+                    d_output=d_inner,
+                )(x)
             case "none":
                 gate_a = jnp.ones((batch_size, seq_len, d_inner))
             case _:
