@@ -4,7 +4,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-from models.recurrence.hps import RNNHyperparams
 from hps import Hyperparams
 
 parallel_scan = jax.lax.associative_scan

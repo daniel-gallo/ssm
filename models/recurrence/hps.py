@@ -11,7 +11,7 @@ class RNNHyperparams:
 
     d_hidden: int = 256
     only_real: bool = False
-    input_norm: bool = True
+    input_norm: Literal["learnable", "fixed", "none"] = "fixed"
     pos_embedding: bool = False
 
     # Parameter initialization
@@ -22,7 +22,8 @@ class RNNHyperparams:
     adaptive_phase: bool = False
     adaptive_d: bool = False
 
-    # Gating mechanisms used
+    # Gating mechanisms used (default = RGLRU)
     n_diag_blocks: int = 32
     gate_x: Literal["sigmoid", "mlp", "none"] = "sigmoid"
-    gate_a: Literal["sigmoid", "mlp", "none"] = "sigmoid"
+    gate_a_real: Literal["sigmoid", "mlp", "none"] = "sigmoid"
+    gate_a_imag: Literal["sigmoid", "mlp", "same", "none"] = "same"

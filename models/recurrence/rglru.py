@@ -81,7 +81,7 @@ class RGLRU(nn.Module):
             case _:
                 raise ValueError(f"Unknown gate_x: {H_rnn.gate_x}")
 
-        match H_rnn.gate_a:
+        match H_rnn.gate_a_real:
             case "sigmoid":
                 gate_a = complex_lib.sigmoid(
                     BlockDiagonalLinear(
@@ -90,25 +90,51 @@ class RGLRU(nn.Module):
                         d_output=d_inner,
                     )(x)
                 )
+                gate_a_real = gate_a
             case "mlp":
                 gate_a = BlockDiagonalLinear(
                     n_blocks=H_rnn.n_diag_blocks,
                     d_input=d_hidden,
                     d_output=d_inner,
                 )(x)
+                gate_a_real = complex_lib.softplus(gate_a)
             case "none":
                 gate_a = jnp.ones((batch_size, seq_len, d_inner))
+                gate_a_real = gate_a
             case _:
-                raise ValueError(f"Unknown gate_a: {H_rnn.gate_a}")
+                raise ValueError(f"Unknown gate_a_real: {H_rnn.gate_a_real}")
 
-        log_a = H_rnn.log_a_scale * gate_a * complex_lib.softplus(a_real_param)
+        match H_rnn.gate_a_imag:
+            case "same":
+                gate_a_imag = gate_a
+            case "sigmoid":
+                gate_a_imag = complex_lib.sigmoid(
+                    BlockDiagonalLinear(
+                        n_blocks=H_rnn.n_diag_blocks,
+                        d_input=d_hidden,
+                        d_output=d_inner,
+                    )(x)
+                )
+            case "mlp":
+                gate_a_imag = BlockDiagonalLinear(
+                    n_blocks=H_rnn.n_diag_blocks,
+                    d_input=d_hidden,
+                    d_output=d_inner,
+                )(x)
+            case "none":
+                gate_a_imag = jnp.ones((batch_size, seq_len, d_inner))
+            case _:
+                raise ValueError(f"Unknown gate_a_imag: {H_rnn.gate_a_imag}")
+
+        log_a = (
+            H_rnn.log_a_scale * gate_a_real * complex_lib.softplus(a_real_param)
+        )
         if H_rnn.only_real:
-            a, a_squared = complex_lib.exp(log_a), complex_lib.exp(2 * log_a)
+            a = complex_lib.exp(log_a)
         else:
-            log_a_imag = a_imag_param * gate_a
+            log_a_imag = a_imag_param * gate_a_imag
             log_a_complex = real_imag_complex(H_rnn, log_a, log_a_imag)
             a = complex_lib.exp(log_a_complex)
-            a_squared = complex_lib.abs_squared(a)
 
         x = merged_to_complex(H_rnn, x)
         h_prev = (
@@ -118,8 +144,15 @@ class RGLRU(nn.Module):
         x = gate_x * x
         # TODO: placement of norm corresponding to RGLRU
         # reconsider doing it before gating
-        if H_rnn.input_norm:
-            x = sqrt_bound_derivative(1 - a_squared, 200) * x
+        match H_rnn.input_norm:
+            case "fixed":
+                a_squared = complex_lib.exp(2 * log_a)
+                norm_factor = sqrt_bound_derivative(1 - a_squared, 200)
+            case "none":
+                norm_factor = 1.0
+            case _:
+                raise ValueError(f"Unknown gate_a_imag: {H_rnn.gate_a_imag}")
+        x = norm_factor * x
 
         sharding_spec = (
             None
