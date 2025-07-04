@@ -168,10 +168,8 @@ def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
     weights = jax.jit(H.model.init)(
         rng_init,
         PaddedArray(
-            jnp.zeros(
-                (H.batch_size // H.num_minibatches,) + H.data_shape, "int32"
-            ),
-            jnp.zeros((H.batch_size // H.num_minibatches,), "int32"),
+            jnp.zeros((H.batch_size,) + H.data_shape, "int32"),
+            jnp.zeros((H.batch_size,), "int32"),
         ),
         random.PRNGKey(0),
     )
@@ -186,9 +184,7 @@ def load_train_state(H: Hyperparams, override_id: Optional[str] = None):
 
 
 @partial(jax.jit, static_argnums=0)
-def get_minibatch_grads_and_metrics(
-    H: Hyperparams, S: TrainState, minibatch: PaddedArray, rng: jax.Array
-):
+def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
     def loss_fn(weights, minibatch, rng):
         rng_iter, rng_dropout = random.split(rng, 2)
         return H.model.apply(
@@ -199,14 +195,42 @@ def get_minibatch_grads_and_metrics(
             rngs={"dropout": rng_dropout},
         )
 
-    minibatch_grads, minibatch_metrics = jax.grad(loss_fn, has_aux=True)(
-        S.weights, minibatch, rng
+    def get_grads_and_metrics(weights, batch, rng, num_minibatches):
+        assert len(batch) % num_minibatches == 0
+        minibatch_size = len(batch) // num_minibatches
+
+        grads = None
+        metrics = None
+
+        for i in range(num_minibatches):
+            rng, rng_iter = random.split(rng)
+            low = i * minibatch_size
+            high = (i + 1) * minibatch_size
+            minibatch = PaddedArray(
+                raw=batch.raw[low:high],
+                lengths=batch.lengths[low:high],
+            )
+
+            minibatch_grads, minibatch_metrics = jax.grad(
+                loss_fn, has_aux=True
+            )(weights, minibatch, rng_iter)
+
+            if grads is None:
+                grads = minibatch_grads
+                metrics = minibatch_metrics
+            else:
+                grads = jax.tree.map(jnp.add, grads, minibatch_grads)
+                metrics = jax.tree.map(jnp.add, metrics, minibatch_metrics)
+
+        grads = jax.tree.map(lambda x: x / num_minibatches, grads)
+        metrics = jax.tree.map(lambda x: x / num_minibatches, metrics)
+
+        return grads, metrics
+
+    rng, rng_grads = random.split(S.rng, 2)
+    grads, metrics = get_grads_and_metrics(
+        S.weights, batch, rng_grads, H.num_minibatches
     )
-    return minibatch_grads, minibatch_metrics
-
-
-@partial(jax.jit, static_argnums=0)
-def update_state_and_metrics(H: Hyperparams, S: TrainState, grads, metrics):
     grads, skip, metrics = clip_grad(H, grads, metrics)
 
     updates, optimizer_state_new = H.optimizer.update(
@@ -225,53 +249,15 @@ def update_state_and_metrics(H: Hyperparams, S: TrainState, grads, metrics):
         (optimizer_state_new, weights_new, weights_ema_new),
     )
 
-    new_rng = random.split(S.rng, 1)[0]
     return (
-        TrainState(weights, weights_ema, optimizer_state, S.step + 1, new_rng),
+        TrainState(weights, weights_ema, optimizer_state, S.step + 1, rng),
         metrics,
     )
 
 
-def train_iter(H: Hyperparams, S: TrainState, batch: PaddedArray):
-    def get_grads_and_metrics(batch, num_minibatches):
-        assert len(batch) % num_minibatches == 0
-        minibatch_size = len(batch) // num_minibatches
-
-        grads = None
-        metrics = None
-
-        rngs = random.split(S.rng, num_minibatches)
-        for i in range(num_minibatches):
-            low = i * minibatch_size
-            high = (i + 1) * minibatch_size
-            minibatch = PaddedArray(
-                raw=batch.raw[low:high],
-                lengths=batch.lengths[low:high],
-            )
-            minibatch = device_put_padded_array_train(H, minibatch)
-            minibatch_grads, minibatch_metrics = (
-                get_minibatch_grads_and_metrics(H, S, minibatch, rngs[i])
-            )
-
-            if grads is None:
-                grads = minibatch_grads
-                metrics = minibatch_metrics
-            else:
-                grads = jax.tree.map(jnp.add, grads, minibatch_grads)
-                metrics = jax.tree.map(jnp.add, metrics, minibatch_metrics)
-
-        grads = jax.tree.map(lambda x: x / num_minibatches, grads)
-        metrics = jax.tree.map(lambda x: x / num_minibatches, metrics)
-
-        return grads, metrics
-
-    grads, metrics = get_grads_and_metrics(batch, H.num_minibatches)
-    S, metrics = update_state_and_metrics(H, S, grads, metrics)
-    return S, metrics
-
-
 def train_epoch(H: Hyperparams, S: TrainState, data: PaddedArray):
     for batch in reshape_batches(H.batch_size, data):
+        batch = device_put_padded_array_train(H, batch)
         S, metrics = train_iter(H, S, batch)
         metrics = prepend_to_keys(metrics, "train/")
         metrics["lr"] = H.scheduler(S.step)
