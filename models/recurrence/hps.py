@@ -24,6 +24,6 @@ class RNNHyperparams:
 
     # Gating mechanisms used (default = RGLRU)
     n_diag_blocks: int = 32
-    gate_x: Literal["sigmoid", "mlp", "none"] = "sigmoid"
+    gate_x: Literal["sigmoid", "tanh","mlp", "none"] = "sigmoid"
     gate_a_real: Literal["sigmoid", "mlp", "none"] = "sigmoid"
-    gate_a_imag: Literal["sigmoid", "mlp", "same", "none"] = "same"
+    gate_a_imag: Literal["sigmoid", "tanh", "mlp", "same", "none"] = "same"
