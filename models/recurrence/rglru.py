@@ -70,6 +70,14 @@ class RGLRU(nn.Module):
                         d_output=d_inner,
                     )(x)
                 )
+            case "tanh":
+                gate_x = nn.tanh(
+                    BlockDiagonalLinear(
+                        n_blocks=H_rnn.n_diag_blocks,
+                        d_input=d_hidden,
+                        d_output=d_inner,
+                    )(x)
+                )
             case "mlp":
                 gate_x = BlockDiagonalLinear(
                     n_blocks=H_rnn.n_diag_blocks,
@@ -115,6 +123,14 @@ class RGLRU(nn.Module):
                         d_output=d_inner,
                     )(x)
                 )
+            case "tanh":
+                gate_a_imag = nn.tanh(
+                    BlockDiagonalLinear(
+                        n_blocks=H_rnn.n_diag_blocks,
+                        d_input=d_hidden,
+                        d_output=d_inner,
+                    )(x)
+                )
             case "mlp":
                 gate_a_imag = BlockDiagonalLinear(
                     n_blocks=H_rnn.n_diag_blocks,
@@ -126,9 +142,14 @@ class RGLRU(nn.Module):
             case _:
                 raise ValueError(f"Unknown gate_a_imag: {H_rnn.gate_a_imag}")
 
-        log_a = (
-            H_rnn.log_a_scale * gate_a_real * complex_lib.softplus(a_real_param)
-        )
+        if H_rnn.gate_a_real == "mlp":
+            log_a = (
+                H_rnn.log_a_scale * complex_lib.softplus(a_real_param * gate_a_real)
+            )
+        else:
+            log_a = (
+                H_rnn.log_a_scale * gate_a_real * complex_lib.softplus(a_real_param)
+            )
         if H_rnn.only_real:
             a = complex_lib.exp(log_a)
         else:
