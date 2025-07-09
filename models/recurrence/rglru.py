@@ -143,12 +143,14 @@ class RGLRU(nn.Module):
                 raise ValueError(f"Unknown gate_a_imag: {H_rnn.gate_a_imag}")
 
         if H_rnn.gate_a_real == "mlp":
-            log_a = (
-                H_rnn.log_a_scale * complex_lib.softplus(a_real_param * gate_a_real)
+            log_a = H_rnn.log_a_scale * complex_lib.softplus(
+                a_real_param * gate_a_real
             )
         else:
             log_a = (
-                H_rnn.log_a_scale * gate_a_real * complex_lib.softplus(a_real_param)
+                H_rnn.log_a_scale
+                * gate_a_real
+                * complex_lib.softplus(a_real_param)
             )
         if H_rnn.only_real:
             a = complex_lib.exp(log_a)

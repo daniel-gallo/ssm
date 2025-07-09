@@ -222,6 +222,205 @@ class Complex:
             yield Complex(real=a, imag=b)
 
 
+@struct.dataclass
+class Quaternion:
+    """Custom Complex class.
+
+    The minimum representation for Jax complex dtype is 64 bits (32 bits for the
+    real part and 32 bits for the imaginary part). This class allows will allow
+    us to work with smaller complex types as bfloat16.
+
+    The complex class provides a subset of the operations that are possible on a
+    Jax Array.
+    """
+
+    real: jax.Array
+    imag: jax.Array
+
+    def __post_init__(self) -> None:
+        if not _is_pytree_placeholder(self.real, self.imag):
+            assert self.real.shape == (3,) + self.imag.shape
+            assert self.real.dtype == self.imag.dtype
+
+    @property
+    def dtype(self) -> jnp.dtype:
+        return self.real.dtype
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return self.real.shape
+
+    @property
+    def size(self) -> int:
+        return self.real.size
+
+    @property
+    def ndim(self) -> int:
+        return self.real.ndim
+
+    def astype(self, dtype: jnp.dtype | None) -> "Quaternion":
+        if dtype is None:
+            return self
+        return Quaternion(
+            real=self.real.astype(dtype),
+            imag=self.imag.astype(dtype),
+        )
+
+    def reshape(self, shape: Sequence[int]) -> "Quaternion":
+        return Quaternion(
+            real=self.real.reshape(shape),
+            imag=self.imag.reshape((3,) + shape),
+        )
+
+    def to_numpy(self) -> jax.Array:
+        # if self.dtype in (jnp.float16, jnp.bfloat16):
+        #     raise ValueError("There does not exist a jnp.complex32 dtype.")
+        # return self.real + 1j * self.imag
+        raise ValueError("There does not exist a jnp.quaternion dtype.")
+
+    def _sanity_check(
+        self,
+        x: Union[jax.Array, "Complex", "Quaternion"],
+    ) -> None:
+        """Check if the arg is not native complex and has the same dtype as this instance.
+
+        This is required to make sure we are converting everything that is
+        jax.complex to the complex wrapper.
+        Args:
+          x: the operand to validate
+        """
+
+        if jnp.iscomplexobj(x):
+            raise ValueError("Expected argument to not be of type jax.complex")
+
+        if not isinstance(x, (float, int)) and self.dtype != x.dtype:
+            raise ValueError(
+                f"Both operands should have the same type! found {self.dtype} and"
+                f" {x.dtype}"
+            )
+
+    def __matmul__(
+        self, x: Union[jax.Array, "Complex", "Quaternion"]
+    ) -> "Quaternion":
+        """Performs the matrix multiplication operation."""
+        self._sanity_check(x)
+
+        if isinstance(x, Complex):
+            raise ValueError(
+                "Expected argument to be of scalar type or Quaternion"
+            )
+
+        if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
+            return Quaternion(
+                real=self.real @ x,
+                imag=self.imag @ x,
+            )
+
+        real = self.real @ x.real - jnp.sum(self.imag @ x.imag, axis=0)
+
+        temp_i = (
+            self.imag[1, ...] @ x.imag[2, ...]
+            - self.imag[2, ...] @ x.imag[1, ...]
+        )
+        temp_j = (
+            self.imag[2, ...] @ x.imag[0, ...]
+            - self.imag[0, ...] @ x.imag[2, ...]
+        )
+        temp_k = (
+            self.imag[0, ...] @ x.imag[1, ...]
+            - self.imag[1, ...] @ x.imag[0, ...]
+        )
+        temp = jnp.stack([temp_i, temp_j, temp_k], axis=0)
+        imag = self.real @ x.imag + self.imag @ x.real + temp
+
+        return Quaternion(real=real, imag=imag)
+
+    def __mul__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
+        """Performs the multiplication operation."""
+        self._sanity_check(x)
+
+        if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
+            return Complex(real=self.real * x, imag=self.imag * x)
+
+        real = self.real * x.real - jnp.sum(self.imag * x.imag, axis=0)
+        temp = jnp.cross(self.imag, x.imag, axisa=0, axisb=0, axisc=0)
+        imag = self.real * x.imag + self.imag * x.real + temp
+        return Quaternion(real=real, imag=imag)
+
+    __rmul__ = __mul__
+
+    def __truediv__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
+        self._sanity_check(x)
+
+        if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
+            return Complex(real=self.real / x, imag=self.imag / x)
+
+        denominator = x.real**2 + jnp.sum(x.imag**2, axis=0)
+        real = (
+            self.real @ x.real + jnp.sum(self.imag @ x.imag, axis=0)
+        ) / denominator
+
+        temp_i = (
+            self.imag[1, ...] @ x.imag[2, ...]
+            - self.imag[2, ...] @ x.imag[1, ...]
+        )
+        temp_j = (
+            self.imag[2, ...] @ x.imag[0, ...]
+            - self.imag[0, ...] @ x.imag[2, ...]
+        )
+        temp_k = (
+            self.imag[0, ...] @ x.imag[1, ...]
+            - self.imag[1, ...] @ x.imag[0, ...]
+        )
+        temp = jnp.stack([temp_i, temp_j, temp_k], axis=0)
+        imag = (self.imag @ x.real - self.real @ x.imag - temp) / denominator
+
+        return Complex(real=real, imag=imag)
+
+    def __neg__(self) -> "Complex":
+        return Complex(real=-self.real, imag=-self.imag)
+
+    def __sub__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
+        self._sanity_check(x)
+        return Complex(real=self.real - x.real, imag=self.imag - x.imag)
+
+    def __rsub__(self, x: jax.Array) -> "Complex":
+        self._sanity_check(x)
+        return Complex(real=x - self.real, imag=-self.imag)
+
+    def __add__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
+        self._sanity_check(x)
+        return Complex(real=self.real + x.real, imag=self.imag + x.imag)
+
+    __radd__ = __add__
+
+    def __getitem__(self, key: Any) -> "Complex":
+        return Complex(real=self.real[key], imag=self.imag[:, *key])
+
+    def __setitem__(self, key: Any, value: "Complex"):
+        # TODO: Is it even used? I don't think the original version works anyway.
+        if not isinstance(value, Complex):
+            raise NotImplementedError()
+        self.real[key] = value.real
+        self.imag[:, *key] = value.imag
+
+    def __eq__(
+        self, other: Any
+    ) -> jax.Array:  # pytype: disable=signature-mismatch
+        if not isinstance(other, (jax.Array, np.ndarray, Complex)):
+            raise ValueError(
+                "Expected argument to be of type jax.Array, np.ndarrayor Complex."
+            )
+
+        all_equal_real = jnp.equal(self.real, other.real)
+        all_equal_imag = jnp.equal(self.imag, other.imag)
+        return jnp.logical_and(all_equal_real, all_equal_imag)
+
+    def __iter__(self):
+        for a, b in zip(self.real, self.imag):
+            yield Complex(real=a, imag=b)
+
+
 RealOrComplex = TypeVar("RealOrComplex", jax.Array, Complex)
 
 
