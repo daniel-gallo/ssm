@@ -239,7 +239,8 @@ class Quaternion:
 
     def __post_init__(self) -> None:
         if not _is_pytree_placeholder(self.real, self.imag):
-            assert self.real.shape == (3,) + self.imag.shape
+            assert self.imag.shape[0] == 3
+            assert self.real.shape == self.imag.shape[1:]
             assert self.real.dtype == self.imag.dtype
 
     @property
@@ -335,7 +336,9 @@ class Quaternion:
 
         return Quaternion(real=real, imag=imag)
 
-    def __mul__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
+    def __mul__(
+        self, x: Union[jax.Array, "Complex", "Quaternion"]
+    ) -> "Quaternion":
         """Performs the multiplication operation."""
         self._sanity_check(x)
 
@@ -349,7 +352,7 @@ class Quaternion:
 
     __rmul__ = __mul__
 
-    def __truediv__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
+    def __truediv__(self, x: Union[jax.Array, "Complex"]) -> "Quaternion":
         self._sanity_check(x)
 
         if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
@@ -375,39 +378,43 @@ class Quaternion:
         temp = jnp.stack([temp_i, temp_j, temp_k], axis=0)
         imag = (self.imag @ x.real - self.real @ x.imag - temp) / denominator
 
-        return Complex(real=real, imag=imag)
+        return Quaternion(real=real, imag=imag)
 
-    def __neg__(self) -> "Complex":
-        return Complex(real=-self.real, imag=-self.imag)
+    def __neg__(self) -> "Quaternion":
+        return Quaternion(real=-self.real, imag=-self.imag)
 
-    def __sub__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
+    def __sub__(
+        self, x: Union[jax.Array, "Complex", "Quaternion"]
+    ) -> "Quaternion":
         self._sanity_check(x)
-        return Complex(real=self.real - x.real, imag=self.imag - x.imag)
+        return Quaternion(real=self.real - x.real, imag=self.imag - x.imag)
 
-    def __rsub__(self, x: jax.Array) -> "Complex":
+    def __rsub__(self, x: jax.Array) -> "Quaternion":
         self._sanity_check(x)
-        return Complex(real=x - self.real, imag=-self.imag)
+        return Quaternion(real=x - self.real, imag=-self.imag)
 
-    def __add__(self, x: Union[jax.Array, "Complex"]) -> "Complex":
+    def __add__(self, x: Union[jax.Array, "Quaternion"]) -> "Quaternion":
         self._sanity_check(x)
-        return Complex(real=self.real + x.real, imag=self.imag + x.imag)
+        return Quaternion(real=self.real + x.real, imag=self.imag + x.imag)
 
     __radd__ = __add__
 
-    def __getitem__(self, key: Any) -> "Complex":
-        return Complex(real=self.real[key], imag=self.imag[:, *key])
+    def __getitem__(self, key: Any) -> "Quaternion":
+        _get = jax.vmap(lambda x: x[key], 0, 0)
+        return Quaternion(real=self.real[key], imag=_get(self.imag))
 
-    def __setitem__(self, key: Any, value: "Complex"):
+    def __setitem__(self, key: Any, value: "Quaternion"):
         # TODO: Is it even used? I don't think the original version works anyway.
-        if not isinstance(value, Complex):
+        if not isinstance(value, Quaternion):
             raise NotImplementedError()
-        self.real[key] = value.real
-        self.imag[:, *key] = value.imag
+        self.real = self.real.at[key].set(value.real)
+        _set = jax.vmap(lambda x, y: x.at[key].set(y), 0, 0)
+        self.imag = _set(self.imag, value.imag)
 
     def __eq__(
         self, other: Any
     ) -> jax.Array:  # pytype: disable=signature-mismatch
-        if not isinstance(other, (jax.Array, np.ndarray, Complex)):
+        if not isinstance(other, (jax.Array, np.ndarray, Quaternion)):
             raise ValueError(
                 "Expected argument to be of type jax.Array, np.ndarrayor Complex."
             )
@@ -417,11 +424,11 @@ class Quaternion:
         return jnp.logical_and(all_equal_real, all_equal_imag)
 
     def __iter__(self):
-        for a, b in zip(self.real, self.imag):
-            yield Complex(real=a, imag=b)
+        for i in range(self.real.shape[0]):
+            yield Quaternion(real=self.real[i], imag=self.imag[:, i])
 
 
-RealOrComplex = TypeVar("RealOrComplex", jax.Array, Complex)
+RealOrComplex = TypeVar("RealOrComplex", jax.Array, Complex, Quaternion)
 
 
 def _treat_method(
@@ -460,6 +467,40 @@ def _treat_method(
         real_new = method(x_real, *args, **kwargs)
         imag_new = method(x_imag, *args, **kwargs)
         return Complex(real=real_new, imag=imag_new)
+    elif (
+        isinstance(x, Quaternion)
+        or (
+            isinstance(x, Sequence)
+            and any(isinstance(xi, Quaternion) for xi in x)
+        )
+        or any(isinstance(ai, Quaternion) for ai in args)
+    ):
+        if isinstance(x, list):
+            x_real = [e.real for e in x]
+            x_imag = [e.imag for e in x]
+        else:
+            x_real = x.real
+            x_imag = x.imag
+
+        if args and any(isinstance(ai, Quaternion) for ai in args):
+            # For the moment, we assume all the args will be of Complex type so we
+            # need to split the real and imaginary part
+            args_real = [e.real for e in args]
+            args_imag = [e.imag for e in args]
+
+            method = functools.partial(method, **kwargs)
+            real_new = method(x_real, *args)
+            imag_new = jax.vmap(method, in_axes=0, out_axes=0)(
+                x_imag, *args_imag
+            )
+            return Quaternion(real=real_new, imag=imag_new)
+
+        method = functools.partial(method, **kwargs)
+        real_new = method(x_real, *args)
+        imag_new = jax.vmap(lambda x: method(x, *args), in_axes=0, out_axes=0)(
+            x_imag
+        )
+        return Quaternion(real=real_new, imag=imag_new)
     else:
         return method(x, *args, **kwargs)
 
@@ -492,14 +533,14 @@ repeat = functools.partial(_treat_method, "repeat", einops)
 
 
 def sigmoid(x: RealOrComplex) -> RealOrComplex:
-    if isinstance(x, Complex):
+    if isinstance(x, Complex) or isinstance(x, Quaternion):
         return 1 / (1 + exp(-x))
 
     return jax.nn.sigmoid(x)
 
 
 def softplus(x: RealOrComplex) -> RealOrComplex:
-    if isinstance(x, Complex):
+    if isinstance(x, Complex) or isinstance(x, Quaternion):
         return log(1 + exp(x))
     else:
         return jax.nn.softplus(x)
@@ -509,6 +550,8 @@ def softplus(x: RealOrComplex) -> RealOrComplex:
 def ones_like(x: RealOrComplex) -> RealOrComplex:
     if isinstance(x, Complex):
         return Complex(jnp.ones_like(x.real), jnp.zeros_like(x.imag))
+    elif isinstance(x, Quaternion):
+        return Quaternion(jnp.ones_like(x.real), jnp.zeros_like(x.imag))
     else:
         return jnp.ones_like(x)
 
@@ -518,6 +561,13 @@ def exp(x: RealOrComplex) -> RealOrComplex:
         r = jnp.exp(x.real)
         theta = x.imag
         return Complex(r * jnp.cos(theta), r * jnp.sin(theta))
+    elif isinstance(x, Quaternion):
+        r = jnp.exp(x.real)
+        theta = jnp.linalg.norm(x.imag, ord=2, axis=0)
+        temp_imag = x.imag / (theta + 1e-6)
+        return Quaternion(
+            real=r * jnp.cos(theta), imag=r * temp_imag * jnp.sin(theta)
+        )
     else:
         return jnp.exp(x)
 
@@ -527,6 +577,14 @@ def log(x: RealOrComplex) -> RealOrComplex:
         r_squared = x.real**2 + x.imag**2
         theta = jnp.arctan2(x.imag, x.real)
         return Complex(jnp.log(r_squared) / 2, theta)
+    elif isinstance(x, Quaternion):
+        magnitude = jnp.sqrt(x.real**2 + jnp.sum(x.imag**2, axis=0))
+        theta = jnp.linalg.norm(x.imag, ord=2, axis=0)
+        unit_imag = x.imag / (theta + 1e-6)
+        return Quaternion(
+            real=jnp.log(magnitude),
+            imag=unit_imag * jnp.sin(x.real / magnitude),
+        )
     else:
         return jnp.log(x)
 
@@ -534,11 +592,15 @@ def log(x: RealOrComplex) -> RealOrComplex:
 def conjugate(x: RealOrComplex) -> RealOrComplex:
     if isinstance(x, Complex):
         return Complex(x.real, -x.imag)
+    elif isinstance(x, Quaternion):
+        return Quaternion(x.real, -x.imag)
     else:
         return jnp.conjugate(x)
 
 
 def abs_squared(x: RealOrComplex) -> jax.Array:
+    if isinstance(x, Quaternion):
+        return x.real**2 + jnp.sum(x.imag**2, axis=0)
     return x.real**2 + x.imag**2
 
 
@@ -549,12 +611,17 @@ def sqrt(x: RealOrComplex) -> RealOrComplex:
             jnp.sqrt(0.5 * (mag + x.real)),
             jnp.sign(x.imag) * jnp.sqrt(0.5 * (mag - x.real)),
         )
+    elif isinstance(x, Quaternion):
+        mag = jnp.sqrt(x.real**2 + jnp.sum(x.imag**2, axis=0))
+        temp = jnp.sqrt((mag + x.real) / 2)
+        return Quaternion(real=temp, imag=0.5 * x.imag / (temp + 1e-6))
     else:
         return jnp.sqrt(x)
 
 
 def einsum(sum_str: str, *args: jax.Array | Complex) -> jax.Array | Complex:
     """Computes the equivalent of jnp.einsum."""
+    # TODO: Add Quaternion support
     num_custom_complex_args = sum(isinstance(arg, Complex) for arg in args)
     num_np_complex_args = sum(jnp.iscomplexobj(arg) for arg in args)
 
