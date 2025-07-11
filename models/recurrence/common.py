@@ -55,11 +55,19 @@ def merged_to_complex(H: RNNHyperparams, x) -> complex_lib.RealOrComplex:
     Returns:
       A (complex) array represented by `x`.
     """
-    if H.only_real:
-        return x
-
-    assert x.shape[-1] % 2 == 0
-    return real_imag_complex(H, *jnp.split(x, 2, axis=-1))
+    match H.dtype_hidden:
+        case "real":
+            return x
+        case "complex":
+            assert x.shape[-1] % 2 == 0
+            return real_imag_complex(H, *jnp.split(x, 2, axis=-1))
+        case "quaternion":
+            assert x.shape[-1] % 4 == 0
+            x = einops.rearrange(x, "... (d i) -> i ... d", i=4)
+            real, imag = x[0], x[1:]
+            return real_imag_complex(H, real, imag)
+        case _:
+            raise ValueError(f"Unknown dtype_hidden: {H.dtype_hidden}")
 
 
 def real_imag_complex(
@@ -77,11 +85,17 @@ def real_imag_complex(
       When using `bfloat16` or Pallas a `complex_lib.Complex` is returned,
       otherwise a native jax array with a complex type.
     """
-    if H.only_real:
-        assert imag is None
-        return real
+    match H.dtype_hidden:
+        case "real":
+            assert imag is None
+            return real
+        case "complex":
+            return complex_lib.Complex(real, imag)
+        case "quaternion":
+            return complex_lib.Quaternion(real, imag)
+        case _:
+            raise ValueError(f"Unknown dtype_hidden: {H.dtype_hidden}")
 
-    return complex_lib.Complex(real, imag)
 
 
 def complex_to_merged(
@@ -100,14 +114,19 @@ def complex_to_merged(
     Returns:
       A merged array represented by `x`.
     """
-    if H.only_real:
-        assert not isinstance(x, complex_lib.Complex) and not jnp.iscomplexobj(
-            x
-        )
-        return x
-
-    else:
-        return einops.rearrange([x.real, x.imag], "c ... d -> ... (c d)", c=2)
+    match H.dtype_hidden:
+        case "real":
+            assert not isinstance(x, complex_lib.Complex) and not jnp.iscomplexobj(
+                x
+            )
+            return x
+        case "complex":
+            return einops.rearrange([x.real, x.imag], "i ... d -> ... (d i)", i=2)
+        case "quaternion":
+            x = jnp.concatenate([x.real[None, ...], x.imag], axis=0)
+            return einops.rearrange(x, "i ... d -> ... (d i)", i=4)
+        case _:
+            raise ValueError(f"Unknown dtype_hidden: {H.dtype_hidden}")
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(1,))

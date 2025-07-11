@@ -1,6 +1,11 @@
 import dataclasses
 from typing import Literal
 
+DTYPE_SCALING = {
+    "real": 1,
+    "complex": 2,
+    "quaternion": 4,
+}
 
 @dataclasses.dataclass(frozen=True)
 class RNNHyperparams:
@@ -10,7 +15,7 @@ class RNNHyperparams:
     ] = "linear_pallas"
 
     d_hidden: int = 256
-    only_real: bool = False
+    dtype_hidden: Literal["real", "complex", "quaternion"] = "complex"
     input_norm: Literal["learnable", "fixed", "none"] = "fixed"
     pos_embedding: bool = False
 
@@ -27,3 +32,7 @@ class RNNHyperparams:
     gate_x: Literal["sigmoid", "tanh", "mlp", "none"] = "sigmoid"
     gate_a_real: Literal["sigmoid", "mlp", "none"] = "sigmoid"
     gate_a_imag: Literal["sigmoid", "tanh", "mlp", "same", "none"] = "same"
+
+    @property
+    def dtype_scaling(self) -> int:
+        return DTYPE_SCALING[self.dtype_hidden]

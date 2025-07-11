@@ -1,6 +1,7 @@
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from einops import rearrange
 
 from hps import Hyperparams
 from models.efficient_scan import complex_lib, pallas, scan
@@ -32,7 +33,8 @@ class RGLRU(nn.Module):
             if H_rnn.adaptive_d
             else H_rnn.d_hidden
         )
-        d_inner = d_hidden if H_rnn.only_real else d_hidden // 2
+        assert d_hidden % H_rnn.dtype_scaling == 0
+        d_inner = d_hidden // H_rnn.dtype_scaling
 
         def stable_init_real(rng, shape, eps=1e-8):
             r_min, r_max = H_rnn.init_minval_real, H_rnn.init_maxval_real
@@ -50,10 +52,16 @@ class RGLRU(nn.Module):
             return jnp.pi * scale * u
 
         a_real_param = self.param("a_real_param", stable_init_real, (d_inner,))
-        if not H_rnn.only_real:
-            a_imag_param = self.param(
-                "a_imag_param", stable_init_imag, (d_inner,)
-            )
+        match H_rnn.dtype_hidden:
+            case "complex":
+                a_imag_param = self.param(
+                    "a_imag_param", stable_init_imag, (d_inner,)
+                )
+            case "quaternion":
+                a_imag_param = self.param(
+                    "a_imag_param", stable_init_imag, (d_inner, 3)
+                )
+
 
         if H_rnn.pos_embedding:
             if pos_emb is None:
@@ -112,35 +120,49 @@ class RGLRU(nn.Module):
             case _:
                 raise ValueError(f"Unknown gate_a_real: {H_rnn.gate_a_real}")
 
-        match H_rnn.gate_a_imag:
-            case "same":
-                gate_a_imag = gate_a
-            case "sigmoid":
-                gate_a_imag = complex_lib.sigmoid(
-                    BlockDiagonalLinear(
+        if H_rnn.dtype_hidden in ["complex", "quaternion"]:
+            d_gate = d_inner if H_rnn.dtype_hidden == "complex" else d_inner * 3
+            match H_rnn.gate_a_imag:
+                case "same":
+                    gate_a_imag = gate_a
+                    if H_rnn.dtype_hidden == "quaternion":
+                        gate_a_imag = jnp.expand_dims(gate_a_imag, axis=-1)
+
+                case "sigmoid":
+                    gate_a_imag = complex_lib.sigmoid(
+                        BlockDiagonalLinear(
+                            n_blocks=H_rnn.n_diag_blocks,
+                            d_input=d_hidden,
+                            d_output=d_gate,
+                        )(x)
+                    )
+                    if H_rnn.dtype_hidden == "quaternion":
+                        gate_a_imag = rearrange(gate_a_imag, "... (d i)->... d i", i=3)
+
+                case "tanh":
+                    gate_a_imag = nn.tanh(
+                        BlockDiagonalLinear(
+                            n_blocks=H_rnn.n_diag_blocks,
+                            d_input=d_hidden,
+                            d_output=d_gate,
+                        )(x)
+                    )
+                    if H_rnn.dtype_hidden == "quaternion":
+                        gate_a_imag = rearrange(gate_a_imag, "... (d i)->... d i", i=3)
+                case "mlp":
+                    gate_a_imag = BlockDiagonalLinear(
                         n_blocks=H_rnn.n_diag_blocks,
                         d_input=d_hidden,
-                        d_output=d_inner,
+                        d_output=d_gate,
                     )(x)
-                )
-            case "tanh":
-                gate_a_imag = nn.tanh(
-                    BlockDiagonalLinear(
-                        n_blocks=H_rnn.n_diag_blocks,
-                        d_input=d_hidden,
-                        d_output=d_inner,
-                    )(x)
-                )
-            case "mlp":
-                gate_a_imag = BlockDiagonalLinear(
-                    n_blocks=H_rnn.n_diag_blocks,
-                    d_input=d_hidden,
-                    d_output=d_inner,
-                )(x)
-            case "none":
-                gate_a_imag = jnp.ones((batch_size, seq_len, d_inner))
-            case _:
-                raise ValueError(f"Unknown gate_a_imag: {H_rnn.gate_a_imag}")
+                    if H_rnn.dtype_hidden == "quaternion":
+                        gate_a_imag = rearrange(gate_a_imag, "... (d i)->... d i", i=3)
+                case "none":
+                    gate_a_imag = jnp.ones((batch_size, seq_len, d_inner))
+                    if H_rnn.dtype_hidden == "quaternion":
+                        gate_a_imag = jnp.expand_dims(gate_a_imag, axis=-1)
+                case _:
+                    raise ValueError(f"Unknown gate_a_imag: {H_rnn.gate_a_imag}")
 
         if H_rnn.gate_a_real == "mlp":
             log_a = H_rnn.log_a_scale * complex_lib.softplus(
@@ -152,12 +174,38 @@ class RGLRU(nn.Module):
                 * gate_a_real
                 * complex_lib.softplus(a_real_param)
             )
-        if H_rnn.only_real:
-            a = complex_lib.exp(log_a)
-        else:
-            log_a_imag = a_imag_param * gate_a_imag
-            log_a_complex = real_imag_complex(H_rnn, log_a, log_a_imag)
-            a = complex_lib.exp(log_a_complex)
+
+        match H_rnn.dtype_hidden:
+            case "real":
+                a = complex_lib.exp(log_a)
+            case "complex":
+                log_a_imag = a_imag_param * gate_a_imag
+                log_a_complex = real_imag_complex(H_rnn, log_a, log_a_imag)
+                a = complex_lib.exp(log_a_complex)
+            case "quaternion":
+                a_real = complex_lib.exp(log_a)
+                log_a_imag = a_imag_param * gate_a_imag
+                alpha, beta, gamma = log_a_imag[..., 0], log_a_imag[...,1], log_a_imag[...,2]
+                imag_w = (
+                    jnp.cos(alpha / 2) * jnp.cos(beta / 2) * jnp.cos(gamma / 2) +
+                    jnp.sin(alpha / 2) * jnp.sin(beta / 2) * jnp.sin(gamma / 2)
+                )
+                imag_x = (
+                    jnp.sin(alpha / 2) * jnp.cos(beta / 2) * jnp.cos(gamma / 2) -
+                    jnp.cos(alpha / 2) * jnp.sin(beta / 2) * jnp.sin(gamma / 2)
+                )
+                imag_y = (
+                    jnp.cos(alpha / 2) * jnp.sin(beta / 2) * jnp.cos(gamma / 2) +
+                    jnp.sin(alpha / 2) * jnp.cos(beta / 2) * jnp.sin(gamma / 2)
+                )
+                imag_z = (
+                    jnp.cos(alpha / 2) * jnp.cos(beta / 2) * jnp.sin(gamma / 2) -
+                    jnp.sin(alpha / 2) * jnp.sin(beta / 2) * jnp.cos(gamma / 2)
+                )
+                a_imag = jnp.stack([imag_x, imag_y, imag_z], axis=0)
+                a = real_imag_complex(H_rnn, imag_w, a_imag) * a_real
+            case _:
+                raise ValueError(f"Unknown dtype_hidden: {H_rnn.dtype_hidden}")
 
         x = merged_to_complex(H_rnn, x)
         h_prev = (
@@ -186,19 +234,34 @@ class RGLRU(nn.Module):
                 sequence_axis_name="seq",
             )
         )
-        h, h_last = scan.linear_scan(
-            x=x,
-            a=a,
-            h0=h_prev,
-            reverse=self.reverse,
-            scan_type=(
-                ScanType.LINEAR_NATIVE
-                if sampling
-                else get_scan_implementation(H_rnn)
-            ),
-            sharding_spec=sharding_spec,
-            unroll=128,
-        )
+        print(h_prev.real.shape, h_prev.imag.shape)
+        print(x.shape)
+        print(a.real.shape, a.imag.shape)
+        if H_rnn.dtype_hidden != "quaternion":
+            h, h_last = scan.linear_scan(
+                x=x,
+                a=a,
+                h0=h_prev,
+                reverse=self.reverse,
+                scan_type=(
+                    ScanType.LINEAR_NATIVE
+                    if sampling
+                    else get_scan_implementation(H_rnn)
+                ),
+                sharding_spec=None,
+                unroll=128,
+            )
+        else:
+            def scan_func(h, x):
+                x, a = x
+                h = h + x * a
+                return h, h
+
+            h_last, h = jax.lax.scan(
+                scan_func,
+                h_prev,
+                (x, a),
+            )
         h = complex_to_merged(H_rnn, h)
         h_last = complex_to_merged(H_rnn, h_last)
         return nn.Dense(d_in)(h), h_last

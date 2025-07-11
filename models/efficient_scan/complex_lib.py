@@ -343,7 +343,7 @@ class Quaternion:
         self._sanity_check(x)
 
         if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
-            return Complex(real=self.real * x, imag=self.imag * x)
+            return Quaternion(real=self.real * x, imag=self.imag * x)
 
         real = self.real * x.real - jnp.sum(self.imag * x.imag, axis=0)
         temp = jnp.cross(self.imag, x.imag, axisa=0, axisb=0, axisc=0)
