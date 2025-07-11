@@ -240,6 +240,20 @@ class Quaternion:
     k: jax.Array
 
     def __post_init__(self) -> None:
+        if any(
+            type(x).__name__ == "Leaf"
+            for x in [self.real, self.i, self.j, self.k]
+        ):
+            print(
+                "[Leaf detected in Quaternion]",
+                self.real,
+                self.i,
+                self.j,
+                self.k,
+            )
+            import traceback
+
+            traceback.print_stack()
         if not _is_pytree_placeholder(self.real, self.i, self.j, self.k):
             assert (
                 self.real.shape == self.i.shape == self.j.shape == self.k.shape
@@ -320,7 +334,7 @@ class Quaternion:
                 "Expected argument to be of scalar type or Quaternion"
             )
 
-        if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
+        if not isinstance(x, Quaternion):
             return Quaternion(
                 real=self.real @ x,
                 i=self.i @ x,
@@ -344,7 +358,7 @@ class Quaternion:
         """Performs the multiplication operation."""
         self._sanity_check(x)
 
-        if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
+        if not isinstance(x, Quaternion):
             return Quaternion(
                 real=self.real * x, i=self.i * x, j=self.j * x, k=self.k * x
             )
@@ -364,7 +378,7 @@ class Quaternion:
     def __truediv__(self, x: Union[jax.Array, "Complex"]) -> "Quaternion":
         self._sanity_check(x)
 
-        if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
+        if not isinstance(x, Quaternion):
             return Quaternion(
                 real=self.real / x, i=self.i / x, j=self.j / x, k=self.k / x
             )
@@ -420,10 +434,14 @@ class Quaternion:
         # TODO: Is it even used? I don't think the original version works anyway.
         if not isinstance(value, Quaternion):
             raise NotImplementedError()
-        self.real = self.real.at[key].set(value.real)
-        self.i = self.i.at[key].set(value.i)
-        self.j = self.j.at[key].set(value.j)
-        self.k = self.k.at[key].set(value.k)
+        # self.real = self.real.at[key].set(value.real)
+        # self.i = self.i.at[key].set(value.i)
+        # self.j = self.j.at[key].set(value.j)
+        # self.k = self.k.at[key].set(value.k)
+        self.real[key] = value.real
+        self.i[key] = value.i
+        self.j[key] = value.j
+        self.k[key] = value.k
 
     def __eq__(
         self, other: Any

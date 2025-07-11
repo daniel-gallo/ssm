@@ -26,7 +26,9 @@ from jax._src.lax.control_flow import for_loop
 from models.efficient_scan import complex_lib
 
 T = TypeVar("T")
-Spec = TypeVar("Spec", complex_lib.Complex, pl.BlockSpec, None)
+Spec = TypeVar(
+    "Spec", complex_lib.Complex, complex_lib.Quaternion, pl.BlockSpec, None
+)
 
 LruPallasResiduals = tuple[
     complex_lib.RealOrComplex,  # a
@@ -43,12 +45,20 @@ def get_acc_dtype(
 ) -> jnp.dtype:
     """Returns the accumulation dtype for the given inputs."""
     if h0 is not None:
-        if isinstance(h0, complex_lib.Complex) or jnp.iscomplexobj(h0):
+        if (
+            isinstance(h0, complex_lib.Complex)
+            or isinstance(h0, complex_lib.Quaternion)
+            or jnp.iscomplexobj(h0)
+        ):
             assert acc_float_dtype == h0.real.dtype
         else:
             assert acc_float_dtype == h0.dtype
         return acc_float_dtype
-    elif isinstance(x, complex_lib.Complex) or not jnp.iscomplexobj(x):
+    elif (
+        isinstance(x, complex_lib.Complex)
+        or isinstance(h0, complex_lib.Quaternion)
+        or not jnp.iscomplexobj(x)
+    ):
         return acc_float_dtype
     else:
         return (x.real.astype(acc_float_dtype) * 1j).dtype
@@ -266,6 +276,13 @@ def pad_array_to_divisible(
     fill = jnp.full(pad_shape, value, dtype=x.dtype)
     if isinstance(x, complex_lib.Complex):
         fill = complex_lib.Complex(fill, jnp.zeros_like(fill))
+    elif isinstance(x, complex_lib.Quaternion):
+        fill = complex_lib.Quaternion(
+            fill,
+            jnp.zeros_like(fill),
+            jnp.zeros_like(fill),
+            jnp.zeros_like(fill),
+        )
 
     to_concat = [x, fill] if pad_on_back else [fill, x]
     return complex_lib.concatenate(to_concat, axis=axis)
@@ -294,10 +311,17 @@ def carry_dtype(dtype: jnp.dtype) -> jnp.dtype:
         return dtype
 
 
-def maybe_wrap_in_complex(v: T, do_wrap: bool) -> T | complex_lib.Complex:
-    if not do_wrap:
+def maybe_wrap_in_complex(
+    v: T, do_wrap: str
+) -> T | complex_lib.Complex | complex_lib.Quaternion:
+    if do_wrap == "real":
         return v
-    return complex_lib.Complex(v, v)
+    elif do_wrap == "complex":
+        return complex_lib.Complex(v, v)
+    elif do_wrap == "quaternion":
+        return complex_lib.Quaternion(v, v, v, v)
+    else:
+        raise ValueError(f"Unsupported type: {type}")
 
 
 def reverse_block_spec(spec: Spec, num_seq_blocks: int) -> Spec:
@@ -312,6 +336,22 @@ def reverse_block_spec(spec: Spec, num_seq_blocks: int) -> Spec:
             ),  # pytype: disable=wrong-arg-types
             imag=reverse_block_spec(
                 spec.imag, num_seq_blocks
+            ),  # pytype: disable=wrong-arg-types
+        )
+
+    elif isinstance(spec, complex_lib.Quaternion):
+        return complex_lib.Quaternion(
+            real=reverse_block_spec(
+                spec.real, num_seq_blocks
+            ),  # pytype: disable=wrong-arg-types
+            i=reverse_block_spec(
+                spec.i, num_seq_blocks
+            ),  # pytype: disable=wrong-arg-types
+            j=reverse_block_spec(
+                spec.j, num_seq_blocks
+            ),  # pytype: disable=wrong-arg-types
+            k=reverse_block_spec(
+                spec.k, num_seq_blocks
             ),  # pytype: disable=wrong-arg-types
         )
 
@@ -664,7 +704,12 @@ def linear_rnn_pallas_call(
         out_specs = list(map(reverse_seq, out_specs))
 
     # Wrap the specs if we are using our custom Complex class.
-    use_custom_complex = isinstance(x, complex_lib.Complex)
+    if isinstance(x, complex_lib.Complex):
+        use_custom_complex = "complex"
+    elif isinstance(x, complex_lib.Quaternion):
+        use_custom_complex = "quaternion"
+    else:
+        use_custom_complex = "real"
     wrap = functools.partial(maybe_wrap_in_complex, do_wrap=use_custom_complex)
     in_specs, out_specs, out_shapes = jax.tree.map(
         wrap, (in_specs, out_specs, out_shapes)
@@ -821,7 +866,9 @@ def _lru_bwd(
     y, a, h0, has_h0 = res
 
     # Conjugate for our custom Complex class.
-    if isinstance(a, complex_lib.Complex):
+    if isinstance(a, complex_lib.Complex) or isinstance(
+        a, complex_lib.Quaternion
+    ):
         a = complex_lib.conjugate(a)
 
     dx, dh0, _ = linear_rnn_shard_corrected_pallas_call(
@@ -842,7 +889,9 @@ def _lru_bwd(
 
     y_shifted = [y[:, 1:], h0] if reverse else [h0, y[:, :-1]]
     y_shifted = complex_lib.concatenate(y_shifted, axis=1)
-    if isinstance(dx, complex_lib.Complex):
+    if isinstance(dx, complex_lib.Complex) or isinstance(
+        dx, complex_lib.Quaternion
+    ):
         y_shifted = complex_lib.conjugate(y_shifted)
 
     da = dx * y_shifted
@@ -890,7 +939,11 @@ def pallas_lru(
         )
 
     native_complex = False
-    if not isinstance(x, complex_lib.Complex) and jnp.iscomplexobj(x):
+    if (
+        not isinstance(x, complex_lib.Complex)
+        and not isinstance(x, complex_lib.Quaternion)
+        and jnp.iscomplexobj(x)
+    ):
         native_complex = True
         x, a, h0 = jax.tree.map(complex_lib.to_custom_complex, x, a, h0)
 
@@ -960,7 +1013,11 @@ def lru_pallas_scan(
         )
 
     native_complex = False
-    if not isinstance(x, complex_lib.Complex) and jnp.iscomplexobj(x):
+    if (
+        not isinstance(x, complex_lib.Complex)
+        and not isinstance(x, complex_lib.Quaternion)
+        and jnp.iscomplexobj(x)
+    ):
         native_complex = True
         x, a, h0 = jax.tree.map(complex_lib.to_custom_complex, x, a, h0)
 
