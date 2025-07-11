@@ -7,6 +7,7 @@ DTYPE_SCALING = {
     "quaternion": 4,
 }
 
+
 @dataclasses.dataclass(frozen=True)
 class RNNHyperparams:
     block_type: Literal["rnn", "lru", "old_lru", "rglru"] = "rglru"

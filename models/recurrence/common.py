@@ -63,8 +63,8 @@ def merged_to_complex(H: RNNHyperparams, x) -> complex_lib.RealOrComplex:
             return real_imag_complex(H, *jnp.split(x, 2, axis=-1))
         case "quaternion":
             assert x.shape[-1] % 4 == 0
-            x = einops.rearrange(x, "... (d i) -> ... d i", i=4)
-            real, imag = x[..., 0], x[..., 1:]
+            x = einops.rearrange(x, "... (d i) -> i ... d", i=4)
+            real, imag = x[0], x[1:]
             return real_imag_complex(H, real, imag)
         case _:
             raise ValueError(f"Unknown dtype_hidden: {H.dtype_hidden}")
@@ -92,10 +92,11 @@ def real_imag_complex(
         case "complex":
             return complex_lib.Complex(real, imag)
         case "quaternion":
-            return complex_lib.Quaternion(real, imag)
+            assert imag.shape[0] == 3
+            i, j, k = imag
+            return complex_lib.Quaternion(real, i, j, k)
         case _:
             raise ValueError(f"Unknown dtype_hidden: {H.dtype_hidden}")
-
 
 
 def complex_to_merged(
@@ -116,15 +117,17 @@ def complex_to_merged(
     """
     match H.dtype_hidden:
         case "real":
-            assert not isinstance(x, complex_lib.Complex) and not jnp.iscomplexobj(
-                x
-            )
+            assert not isinstance(
+                x, complex_lib.Complex
+            ) and not jnp.iscomplexobj(x)
             return x
         case "complex":
-            return einops.rearrange([x.real, x.imag], "i ... d -> ... (d i)", i=2)
+            return einops.rearrange(
+                [x.real, x.imag], "i ... d -> ... (d i)", i=2
+            )
         case "quaternion":
-            x = jnp.concatenate([x.real[..., None], x.imag], axis=-1)
-            return einops.rearrange(x, "... d i-> ... (d i)", i=4)
+            x = jnp.stack([x.real, x.i, x.j, x.k], axis=0)
+            return einops.rearrange(x, "i ... d-> ... (d i)", i=4)
         case _:
             raise ValueError(f"Unknown dtype_hidden: {H.dtype_hidden}")
 
