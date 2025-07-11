@@ -202,7 +202,7 @@ class RGLRU(nn.Module):
                     jnp.cos(alpha / 2) * jnp.cos(beta / 2) * jnp.sin(gamma / 2) -
                     jnp.sin(alpha / 2) * jnp.sin(beta / 2) * jnp.cos(gamma / 2)
                 )
-                a_imag = jnp.stack([imag_x, imag_y, imag_z], axis=0)
+                a_imag = jnp.stack([imag_x, imag_y, imag_z], axis=-1)
                 a = real_imag_complex(H_rnn, imag_w, a_imag) * a_real
             case _:
                 raise ValueError(f"Unknown dtype_hidden: {H_rnn.dtype_hidden}")
@@ -234,10 +234,7 @@ class RGLRU(nn.Module):
                 sequence_axis_name="seq",
             )
         )
-        print(h_prev.real.shape, h_prev.imag.shape)
-        print(x.shape)
-        print(a.real.shape, a.imag.shape)
-        if H_rnn.dtype_hidden != "quaternion":
+        if H_rnn.dtype_hidden == "real":
             h, h_last = scan.linear_scan(
                 x=x,
                 a=a,
@@ -248,7 +245,7 @@ class RGLRU(nn.Module):
                     if sampling
                     else get_scan_implementation(H_rnn)
                 ),
-                sharding_spec=None,
+                sharding_spec=sharding_spec,
                 unroll=128,
             )
         else:
@@ -256,12 +253,14 @@ class RGLRU(nn.Module):
                 x, a = x
                 h = h + x * a
                 return h, h
-
+            x = complex_lib.moveaxis(x, 1, 0)
+            a = complex_lib.moveaxis(a, 1, 0)
             h_last, h = jax.lax.scan(
                 scan_func,
                 h_prev,
                 (x, a),
             )
+            h = complex_lib.moveaxis(h, 0, 1)
         h = complex_to_merged(H_rnn, h)
         h_last = complex_to_merged(H_rnn, h_last)
         return nn.Dense(d_in)(h), h_last

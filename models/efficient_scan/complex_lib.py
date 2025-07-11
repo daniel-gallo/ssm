@@ -239,8 +239,8 @@ class Quaternion:
 
     def __post_init__(self) -> None:
         if not _is_pytree_placeholder(self.real, self.imag):
-            assert self.imag.shape[0] == 3
-            assert self.real.shape == self.imag.shape[1:]
+            assert self.imag.shape[-1] == 3
+            assert self.real.shape == self.imag.shape[:-1]
             assert self.real.dtype == self.imag.dtype
 
     @property
@@ -270,7 +270,7 @@ class Quaternion:
     def reshape(self, shape: Sequence[int]) -> "Quaternion":
         return Quaternion(
             real=self.real.reshape(shape),
-            imag=self.imag.reshape((3,) + shape),
+            imag=self.imag.reshape(shape + (3,)),
         )
 
     def to_numpy(self) -> jax.Array:
@@ -306,35 +306,40 @@ class Quaternion:
         """Performs the matrix multiplication operation."""
         self._sanity_check(x)
 
+        real, imag = self.real, jnp.moveaxis(self.imag, -1, 0)
+
         if isinstance(x, Complex):
             raise ValueError(
                 "Expected argument to be of scalar type or Quaternion"
             )
 
         if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
+            new_imag = jnp.moveaxis(imag @ x, 0, -1)
             return Quaternion(
-                real=self.real @ x,
-                imag=self.imag @ x,
+                real=real @ x,
+                imag=new_imag,
             )
 
-        real = self.real @ x.real - jnp.sum(self.imag @ x.imag, axis=0)
+        x_real, x_imag = x.real, jnp.moveaxis(x.imag, -1, 0)
+
+        new_real = real @ x_real - jnp.sum(imag @ x_imag, axis=0)
 
         temp_i = (
-            self.imag[1, ...] @ x.imag[2, ...]
-            - self.imag[2, ...] @ x.imag[1, ...]
+            imag[1, ...] @ x_imag[2, ...]
+            - imag[2, ...] @ x_imag[1, ...]
         )
         temp_j = (
-            self.imag[2, ...] @ x.imag[0, ...]
-            - self.imag[0, ...] @ x.imag[2, ...]
+            imag[2, ...] @ x_imag[0, ...]
+            - imag[0, ...] @ x_imag[2, ...]
         )
         temp_k = (
-            self.imag[0, ...] @ x.imag[1, ...]
-            - self.imag[1, ...] @ x.imag[0, ...]
+            imag[0, ...] @ x_imag[1, ...]
+            - imag[1, ...] @ x_imag[0, ...]
         )
         temp = jnp.stack([temp_i, temp_j, temp_k], axis=0)
-        imag = self.real @ x.imag + self.imag @ x.real + temp
-
-        return Quaternion(real=real, imag=imag)
+        new_imag = real @ x_imag + imag @ x_real + temp
+        new_imag = jnp.moveaxis(new_imag, 0, -1)
+        return Quaternion(real=new_real, imag=new_imag)
 
     def __mul__(
         self, x: Union[jax.Array, "Complex", "Quaternion"]
@@ -342,43 +347,53 @@ class Quaternion:
         """Performs the multiplication operation."""
         self._sanity_check(x)
 
+        real, imag = self.real, jnp.moveaxis(self.imag, -1, 0)
         if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
-            return Quaternion(real=self.real * x, imag=self.imag * x)
+            new_imag = jnp.moveaxis(imag * x, 0, -1)
+            return Quaternion(real=real * x, imag=new_imag)
 
-        real = self.real * x.real - jnp.sum(self.imag * x.imag, axis=0)
-        temp = jnp.cross(self.imag, x.imag, axisa=0, axisb=0, axisc=0)
-        imag = self.real * x.imag + self.imag * x.real + temp
-        return Quaternion(real=real, imag=imag)
+        x_real, x_imag = x.real, jnp.moveaxis(x.imag, -1, 0)
+
+        new_real = real * x_real - jnp.sum(imag * x_imag, axis=0)
+        temp = jnp.cross(imag, x_imag, axisa=0, axisb=0, axisc=0)
+        new_imag = real * x_imag + imag * x_real + temp
+        new_imag = jnp.moveaxis(new_imag, 0, -1)
+        return Quaternion(real=new_real, imag=new_imag)
 
     __rmul__ = __mul__
 
     def __truediv__(self, x: Union[jax.Array, "Complex"]) -> "Quaternion":
         self._sanity_check(x)
 
-        if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
-            return Complex(real=self.real / x, imag=self.imag / x)
+        real, imag = self.real, jnp.moveaxis(self.imag, -1, 0)
 
-        denominator = x.real**2 + jnp.sum(x.imag**2, axis=0)
-        real = (
-            self.real @ x.real + jnp.sum(self.imag @ x.imag, axis=0)
+        if isinstance(x, (jax.Array, np.ndarray)) and not jnp.iscomplexobj(x):
+            new_imag = jnp.moveaxis(imag / x, 0, -1)
+            return Complex(real=real / x, imag=new_imag)
+
+        x_real, x_imag = x.real, jnp.moveaxis(x.imag, -1, 0)
+
+        denominator = x_real**2 + jnp.sum(x_imag**2, axis=0)
+        new_real = (
+            real @ x_real + jnp.sum(imag @ x_imag, axis=0)
         ) / denominator
 
         temp_i = (
-            self.imag[1, ...] @ x.imag[2, ...]
-            - self.imag[2, ...] @ x.imag[1, ...]
+            imag[1, ...] @ x_imag[2, ...]
+            - imag[2, ...] @ x_imag[1, ...]
         )
         temp_j = (
-            self.imag[2, ...] @ x.imag[0, ...]
-            - self.imag[0, ...] @ x.imag[2, ...]
+            imag[2, ...] @ x_imag[0, ...]
+            - imag[0, ...] @ x_imag[2, ...]
         )
         temp_k = (
-            self.imag[0, ...] @ x.imag[1, ...]
-            - self.imag[1, ...] @ x.imag[0, ...]
+            imag[0, ...] @ x_imag[1, ...]
+            - imag[1, ...] @ x_imag[0, ...]
         )
         temp = jnp.stack([temp_i, temp_j, temp_k], axis=0)
-        imag = (self.imag @ x.real - self.real @ x.imag - temp) / denominator
-
-        return Quaternion(real=real, imag=imag)
+        new_imag = (imag @ x_real - real @ x_imag - temp) / denominator
+        new_imag = jnp.moveaxis(new_imag, 0, -1)
+        return Quaternion(real=new_real, imag=new_imag)
 
     def __neg__(self) -> "Quaternion":
         return Quaternion(real=-self.real, imag=-self.imag)
@@ -400,7 +415,7 @@ class Quaternion:
     __radd__ = __add__
 
     def __getitem__(self, key: Any) -> "Quaternion":
-        _get = jax.vmap(lambda x: x[key], 0, 0)
+        _get = jax.vmap(lambda x: x[key], -1, -1)
         return Quaternion(real=self.real[key], imag=_get(self.imag))
 
     def __setitem__(self, key: Any, value: "Quaternion"):
@@ -408,7 +423,7 @@ class Quaternion:
         if not isinstance(value, Quaternion):
             raise NotImplementedError()
         self.real = self.real.at[key].set(value.real)
-        _set = jax.vmap(lambda x, y: x.at[key].set(y), 0, 0)
+        _set = jax.vmap(lambda x, y: x.at[key].set(y), -1, -1)
         self.imag = _set(self.imag, value.imag)
 
     def __eq__(
@@ -425,7 +440,7 @@ class Quaternion:
 
     def __iter__(self):
         for i in range(self.real.shape[0]):
-            yield Quaternion(real=self.real[i], imag=self.imag[:, i])
+            yield Quaternion(real=self.real[i], imag=self.imag[i, ..., :])
 
 
 RealOrComplex = TypeVar("RealOrComplex", jax.Array, Complex, Quaternion)
@@ -490,14 +505,14 @@ def _treat_method(
 
             method = functools.partial(method, **kwargs)
             real_new = method(x_real, *args)
-            imag_new = jax.vmap(method, in_axes=0, out_axes=0)(
+            imag_new = jax.vmap(method, in_axes=-1, out_axes=-1)(
                 x_imag, *args_imag
             )
             return Quaternion(real=real_new, imag=imag_new)
 
         method = functools.partial(method, **kwargs)
         real_new = method(x_real, *args)
-        imag_new = jax.vmap(lambda x: method(x, *args), in_axes=0, out_axes=0)(
+        imag_new = jax.vmap(lambda x: method(x, *args), in_axes=-1, out_axes=-1)(
             x_imag
         )
         return Quaternion(real=real_new, imag=imag_new)
@@ -516,6 +531,7 @@ split = functools.partial(_treat_method, "split", jnp)
 expand_dims = functools.partial(_treat_method, "expand_dims", jnp)
 flip = functools.partial(_treat_method, "flip", jnp)
 reshape = functools.partial(_treat_method, "reshape", jnp)
+moveaxis = functools.partial(_treat_method, "moveaxis", jnp)
 squeeze = functools.partial(_treat_method, "squeeze", jnp)
 stack = functools.partial(_treat_method, "stack", jnp)
 tile = functools.partial(_treat_method, "tile", jnp)
@@ -563,10 +579,10 @@ def exp(x: RealOrComplex) -> RealOrComplex:
         return Complex(r * jnp.cos(theta), r * jnp.sin(theta))
     elif isinstance(x, Quaternion):
         r = jnp.exp(x.real)
-        theta = jnp.linalg.norm(x.imag, ord=2, axis=0)
-        temp_imag = x.imag / (theta + 1e-6)
+        theta = jnp.linalg.norm(x.imag, ord=2, axis=-1)
+        temp_imag = x.imag / (theta[..., None] + 1e-6)
         return Quaternion(
-            real=r * jnp.cos(theta), imag=r * temp_imag * jnp.sin(theta)
+            real=r * jnp.cos(theta), imag=r[..., None] * temp_imag * jnp.sin(theta)[..., None]
         )
     else:
         return jnp.exp(x)
@@ -578,12 +594,12 @@ def log(x: RealOrComplex) -> RealOrComplex:
         theta = jnp.arctan2(x.imag, x.real)
         return Complex(jnp.log(r_squared) / 2, theta)
     elif isinstance(x, Quaternion):
-        magnitude = jnp.sqrt(x.real**2 + jnp.sum(x.imag**2, axis=0))
-        theta = jnp.linalg.norm(x.imag, ord=2, axis=0)
-        unit_imag = x.imag / (theta + 1e-6)
+        magnitude = jnp.sqrt(x.real**2 + jnp.sum(x.imag**2, axis=-1))
+        theta = jnp.linalg.norm(x.imag, ord=2, axis=-1)
+        unit_imag = x.imag / (theta[..., None] + 1e-6)
         return Quaternion(
             real=jnp.log(magnitude),
-            imag=unit_imag * jnp.sin(x.real / magnitude),
+            imag=unit_imag * jnp.sin(x.real / magnitude)[..., None],
         )
     else:
         return jnp.log(x)
@@ -600,7 +616,7 @@ def conjugate(x: RealOrComplex) -> RealOrComplex:
 
 def abs_squared(x: RealOrComplex) -> jax.Array:
     if isinstance(x, Quaternion):
-        return x.real**2 + jnp.sum(x.imag**2, axis=0)
+        return x.real**2 + jnp.sum(x.imag**2, axis=-1)
     return x.real**2 + x.imag**2
 
 
@@ -612,7 +628,7 @@ def sqrt(x: RealOrComplex) -> RealOrComplex:
             jnp.sign(x.imag) * jnp.sqrt(0.5 * (mag - x.real)),
         )
     elif isinstance(x, Quaternion):
-        mag = jnp.sqrt(x.real**2 + jnp.sum(x.imag**2, axis=0))
+        mag = jnp.sqrt(x.real**2 + jnp.sum(x.imag**2, axis=-1))
         temp = jnp.sqrt((mag + x.real) / 2)
         return Quaternion(real=temp, imag=0.5 * x.imag / (temp + 1e-6))
     else:
