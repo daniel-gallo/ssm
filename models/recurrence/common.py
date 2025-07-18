@@ -60,7 +60,9 @@ def merged_to_complex(H: RNNHyperparams, x) -> complex_lib.RealOrComplex:
             return x
         case "complex":
             assert x.shape[-1] % 2 == 0
-            return real_imag_complex(H, *jnp.split(x, 2, axis=-1))
+            x = einops.rearrange(x, "... (d i) -> i ... d", i=2)
+            real, imag = x[0], x[1]
+            return real_imag_complex(H, real, imag)
         case "quaternion":
             assert x.shape[-1] % 4 == 0
             x = einops.rearrange(x, "... (d i) -> i ... d", i=4)
