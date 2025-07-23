@@ -197,18 +197,12 @@ class RGLRU(nn.Module):
                     log_a_imag[..., 1],
                     log_a_imag[..., 2],
                 )
-                imag_w = jnp.cos(alpha / 2) * jnp.cos(beta / 2) * jnp.cos(
-                    gamma / 2
-                ) + jnp.sin(alpha / 2) * jnp.sin(beta / 2) * jnp.sin(gamma / 2)
-                imag_x = jnp.sin(alpha / 2) * jnp.cos(beta / 2) * jnp.cos(
-                    gamma / 2
-                ) - jnp.cos(alpha / 2) * jnp.sin(beta / 2) * jnp.sin(gamma / 2)
-                imag_y = jnp.cos(alpha / 2) * jnp.sin(beta / 2) * jnp.cos(
-                    gamma / 2
-                ) + jnp.sin(alpha / 2) * jnp.cos(beta / 2) * jnp.sin(gamma / 2)
-                imag_z = jnp.cos(alpha / 2) * jnp.cos(beta / 2) * jnp.sin(
-                    gamma / 2
-                ) - jnp.sin(alpha / 2) * jnp.sin(beta / 2) * jnp.cos(gamma / 2)
+                a_sin, b_sin, c_sin = jnp.sin(alpha / 2), jnp.sin(beta / 2), jnp.sin(gamma / 2)
+                a_cos, b_cos, c_cos = jnp.cos(alpha / 2), jnp.cos(beta / 2), jnp.cos(gamma / 2)
+                imag_w = a_cos * b_cos * c_cos + a_sin * b_sin * c_sin
+                imag_x = a_sin * b_cos * c_cos - a_cos * b_sin * c_sin
+                imag_y = a_cos * b_sin * c_cos + a_sin * b_cos * c_sin
+                imag_z = a_cos * b_cos * c_sin - a_sin * b_sin * c_cos
                 a_imag = jnp.stack([imag_x, imag_y, imag_z], axis=0)
                 a = real_imag_complex(H_rnn, imag_w, a_imag) * a_real
             case _:
@@ -241,35 +235,19 @@ class RGLRU(nn.Module):
                 sequence_axis_name="seq",
             )
         )
-        if True:
-            h, h_last = scan.linear_scan(
-                x=x,
-                a=a,
-                h0=h_prev,
-                reverse=self.reverse,
-                scan_type=(
-                    ScanType.LINEAR_NATIVE
-                    if sampling
-                    else get_scan_implementation(H_rnn)
-                ),
-                sharding_spec=sharding_spec,
-                unroll=128,
-            )
-        else:
-
-            def scan_func(h, x):
-                x, a = x
-                h = h + x * a
-                return h, h
-
-            x = complex_lib.moveaxis(x, 1, 0)
-            a = complex_lib.moveaxis(a, 1, 0)
-            h_last, h = jax.lax.scan(
-                scan_func,
-                h_prev,
-                (x, a),
-            )
-            h = complex_lib.moveaxis(h, 0, 1)
+        h, h_last = scan.linear_scan(
+            x=x,
+            a=a,
+            h0=h_prev,
+            reverse=self.reverse,
+            scan_type=(
+                ScanType.LINEAR_NATIVE
+                if sampling
+                else get_scan_implementation(H_rnn)
+            ),
+            sharding_spec=sharding_spec,
+            unroll=128,
+        )
         h = complex_to_merged(H_rnn, h)
         h_last = complex_to_merged(H_rnn, h_last)
         return nn.Dense(d_in)(h), h_last
