@@ -555,7 +555,10 @@ def linear_rnn_loop_body(
     h_t = h_carry_ref[:]
     a_t = a_ref[:, a_idx].astype(h_t.dtype)
     x_t = x_ref[:, x_idx].astype(h_t.dtype)
-    h_next = a_t * h_t + x_t
+    if backprop:
+        h_next = h_t * a_t + x_t
+    else:
+        h_next = a_t * h_t + x_t
 
     # Store
     h_carry_ref[:] = h_next
