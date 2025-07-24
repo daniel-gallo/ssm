@@ -28,10 +28,14 @@ class RNNHyperparams:
     adaptive_phase: bool = False
     adaptive_d: bool = False
 
+    # Parametrisation
+    param_real: Literal["softplus", "exponential"] = "exponential"
+    param_imag: Literal["linear", "tanh"] = "linear"
+
     # Gating mechanisms used (default = RGLRU)
     n_diag_blocks: int = 32
     gate_x: Literal["sigmoid", "tanh", "mlp", "none"] = "sigmoid"
-    gate_a_real: Literal["sigmoid", "mlp", "none"] = "sigmoid"
+    gate_a_real: Literal["log_sigmoid", "mlp", "tanh","none"] = "log_sigmoid"
     gate_a_imag: Literal["sigmoid", "tanh", "mlp", "same", "none"] = "same"
 
     @property
