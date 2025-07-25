@@ -257,7 +257,7 @@ class RGLRU(nn.Module):
             case "fixed":
                 a_squared = jnp.square(magn_a)
                 norm_factor = sqrt_bound_derivative(
-                    jnp.minimum(1 - a_squared, jnp.zeros_like(a_squared)),
+                    jnp.maximum(1 - a_squared, jnp.zeros_like(a_squared)),
                     200
                 )
             case "none":
