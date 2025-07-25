@@ -36,20 +36,35 @@ class RGLRU(nn.Module):
         assert d_hidden % H_rnn.dtype_scaling == 0
         d_inner = d_hidden // H_rnn.dtype_scaling
 
+        # INITIALISERS
         def stable_init_real(rng, shape, eps=1e-8):
             r_min, r_max = H_rnn.init_minval_real, H_rnn.init_maxval_real
             u = jax.random.uniform(rng, shape=shape)
-            a_real = 0.5 * jnp.log(u * (r_max**2 - r_min**2) + r_min**2 + eps)
-            return jnp.log(jnp.exp(-a_real) - 1.0)
+            match H_rnn.param_real:
+                case "softplus":
+                    a_real = jnp.sqrt(u * (r_max**2 - r_min**2) + r_min**2 + eps)
+                case "exponential":
+                    constant = 1 / H_rnn.log_a_scale
+                    a_real = constant * jnp.log(u * (r_max**2 - r_min**2) + r_min**2 + eps)
+                case _:
+                    raise ValueError(f"Unknown param_real: {H_rnn.param_real}")
+            return jnp.log(jnp.exp(a_real) - 1.0)
 
         def stable_init_imag(rng, shape):
-            u = jax.random.uniform(rng, shape=shape)
+            u = 2 * jax.random.uniform(rng, shape=shape) - 1
             scale = (
                 H_rnn.init_maxval_imag * self.temporal_scale
                 if H_rnn.adaptive_phase
                 else H_rnn.init_maxval_imag
             )
-            return jnp.pi * scale * u
+            match H_rnn.param_imag:
+                case "linear":
+                    theta = scale * u
+                case "tanh":
+                    theta = jnp.arctanh(scale * u)
+                case _:
+                    raise ValueError(f"Unknown param_imag: {H_rnn.param_imag}")
+            return theta
 
         a_real_param = self.param("a_real_param", stable_init_real, (d_inner,))
         match H_rnn.dtype_hidden:
@@ -97,7 +112,7 @@ class RGLRU(nn.Module):
                 raise ValueError(f"Unknown gate_x: {H_rnn.gate_x}")
 
         match H_rnn.gate_a_real:
-            case "sigmoid":
+            case "log_sigmoid":
                 gate_a = complex_lib.sigmoid(
                     BlockDiagonalLinear(
                         n_blocks=H_rnn.n_diag_blocks,
@@ -105,21 +120,34 @@ class RGLRU(nn.Module):
                         d_output=d_inner,
                     )(x)
                 )
-                gate_a_real = gate_a
+                log_gate_a_real = gate_a
+                gate_a_real = jnp.ones_like(gate_a)
             case "mlp":
                 gate_a = BlockDiagonalLinear(
                     n_blocks=H_rnn.n_diag_blocks,
                     d_input=d_hidden,
                     d_output=d_inner,
                 )(x)
-                gate_a_real = complex_lib.softplus(gate_a)
+                log_gate_a_real = jnp.ones_like(gate_a)
+                gate_a_real = gate_a
+            case "tanh":
+                gate_a = jnp.tanh(
+                        BlockDiagonalLinear(
+                        n_blocks=H_rnn.n_diag_blocks,
+                        d_input=d_hidden,
+                        d_output=d_inner,
+                    )(x)
+                )
+                log_gate_a_real = jnp.ones_like(gate_a)
+                gate_a_real = gate_a
             case "none":
                 gate_a = jnp.ones((batch_size, seq_len, d_inner))
+                log_gate_a_real = gate_a
                 gate_a_real = gate_a
             case _:
                 raise ValueError(f"Unknown gate_a_real: {H_rnn.gate_a_real}")
 
-        if H_rnn.dtype_hidden in ["complex", "quaternion"]:
+        if H_rnn.dtype_hidden != "real":
             d_gate = d_inner if H_rnn.dtype_hidden == "complex" else d_inner * 3
             match H_rnn.gate_a_imag:
                 case "same":
@@ -171,27 +199,36 @@ class RGLRU(nn.Module):
                         f"Unknown gate_a_imag: {H_rnn.gate_a_imag}"
                     )
 
-        if H_rnn.gate_a_real == "mlp":
-            log_a = H_rnn.log_a_scale * complex_lib.softplus(
-                a_real_param * gate_a_real
-            )
-        else:
-            log_a = (
-                H_rnn.log_a_scale
-                * gate_a_real
-                * complex_lib.softplus(a_real_param)
-            )
+        match H_rnn.param_real:
+            case "softplus":
+                magn_a = jnp.power(complex_lib.softplus(a_real_param), log_gate_a_real)
+                magn_a = magn_a * gate_a_real
+            case "exponential":
+                log_a = (
+                    H_rnn.log_a_scale
+                    * log_gate_a_real
+                    * complex_lib.softplus(a_real_param)
+                )
+                magn_a = complex_lib.exp(log_a) * gate_a_real
+            case _:
+                raise ValueError(f"Unknown parameterization for real part: {H_rnn.param_real}")
+
+        if H_rnn.dtype_hidden != "real":
+            match H_rnn.param_imag:
+                case "linear":
+                    log_a_imag = a_imag_param * gate_a_imag * jnp.pi
+                case "tanh":
+                    log_a_imag = jnp.tanh(a_imag_param) * gate_a_imag * jnp.pi
+                case _:
+                    raise ValueError(f"Unknown parameterization for imaginary part: {H_rnn.param_imag}")
 
         match H_rnn.dtype_hidden:
             case "real":
-                a = complex_lib.exp(log_a)
+                a = magn_a
             case "complex":
-                log_a_imag = a_imag_param * gate_a_imag
-                log_a_complex = real_imag_complex(H_rnn, log_a, log_a_imag)
-                a = complex_lib.exp(log_a_complex)
+                log_a_complex = real_imag_complex(H_rnn, jnp.zeros_like(magn_a), log_a_imag)
+                a = magn_a * complex_lib.exp(log_a_complex)
             case "quaternion":
-                a_real = complex_lib.exp(log_a)
-                log_a_imag = a_imag_param * gate_a_imag
                 alpha, beta, gamma = (
                     log_a_imag[..., 0],
                     log_a_imag[..., 1],
@@ -204,7 +241,7 @@ class RGLRU(nn.Module):
                 imag_y = a_cos * b_sin * c_cos + a_sin * b_cos * c_sin
                 imag_z = a_cos * b_cos * c_sin - a_sin * b_sin * c_cos
                 a_imag = jnp.stack([imag_x, imag_y, imag_z], axis=0)
-                a = real_imag_complex(H_rnn, imag_w, a_imag) * a_real
+                a = real_imag_complex(H_rnn, imag_w, a_imag) * magn_a
             case _:
                 raise ValueError(f"Unknown dtype_hidden: {H_rnn.dtype_hidden}")
 
@@ -218,8 +255,11 @@ class RGLRU(nn.Module):
         # reconsider doing it before gating
         match H_rnn.input_norm:
             case "fixed":
-                a_squared = complex_lib.exp(2 * log_a)
-                norm_factor = sqrt_bound_derivative(1 - a_squared, 200)
+                a_squared = jnp.square(magn_a)
+                norm_factor = sqrt_bound_derivative(
+                    jnp.maximum(1 - a_squared, jnp.full_like(a_squared, 1e-6)),
+                    200
+                )
             case "none":
                 norm_factor = 1.0
             case _:
