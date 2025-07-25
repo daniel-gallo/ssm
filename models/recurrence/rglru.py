@@ -155,7 +155,7 @@ class RGLRU(nn.Module):
                     if H_rnn.dtype_hidden == "quaternion":
                         gate_a_imag = jnp.expand_dims(gate_a_imag, axis=-1)
 
-                case "log_sigmoid":
+                case "sigmoid":
                     gate_a_imag = complex_lib.sigmoid(
                         BlockDiagonalLinear(
                             n_blocks=H_rnn.n_diag_blocks,
