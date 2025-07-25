@@ -41,7 +41,7 @@ class RGLRU(nn.Module):
             r_min, r_max = H_rnn.init_minval_real, H_rnn.init_maxval_real
             u = jax.random.uniform(rng, shape=shape)
             match H_rnn.param_real:
-                case "linear":
+                case "softplus":
                     a_real = jnp.sqrt(u * (r_max**2 - r_min**2) + r_min**2 + eps)
                 case "exponential":
                     constant = 1 / H_rnn.log_a_scale
@@ -155,7 +155,7 @@ class RGLRU(nn.Module):
                     if H_rnn.dtype_hidden == "quaternion":
                         gate_a_imag = jnp.expand_dims(gate_a_imag, axis=-1)
 
-                case "sigmoid":
+                case "log_sigmoid":
                     gate_a_imag = complex_lib.sigmoid(
                         BlockDiagonalLinear(
                             n_blocks=H_rnn.n_diag_blocks,
@@ -217,7 +217,7 @@ class RGLRU(nn.Module):
             match H_rnn.param_imag:
                 case "linear":
                     log_a_imag = a_imag_param * gate_a_imag * jnp.pi
-                case "exponential":
+                case "tanh":
                     log_a_imag = jnp.tanh(a_imag_param) * gate_a_imag * jnp.pi
                 case _:
                     raise ValueError(f"Unknown parameterization for imaginary part: {H_rnn.param_imag}")

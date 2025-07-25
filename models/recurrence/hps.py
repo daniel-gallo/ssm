@@ -21,7 +21,7 @@ class RNNHyperparams:
     pos_embedding: bool = False
 
     # Parameter initialization
-    log_a_scale: float = -8.0
+    log_a_scale: float = -1.0
     init_minval_real: float = 0.9
     init_maxval_real: float = 0.99
     init_maxval_imag: float = 0.1
