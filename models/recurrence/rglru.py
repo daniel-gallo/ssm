@@ -44,7 +44,7 @@ class RGLRU(nn.Module):
                 case "softplus":
                     a_real = jnp.sqrt(u * (r_max**2 - r_min**2) + r_min**2 + eps)
                 case "exponential":
-                    constant = 1 / H_rnn.log_a_scale
+                    constant = -0.5
                     a_real = constant * jnp.log(u * (r_max**2 - r_min**2) + r_min**2 + eps)
                 case _:
                     raise ValueError(f"Unknown param_real: {H_rnn.param_real}")
