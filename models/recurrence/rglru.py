@@ -68,6 +68,25 @@ class RGLRU(nn.Module):
                     raise ValueError(f"Unknown param_imag: {H_rnn.param_imag}")
             return theta
 
+        def init_norm(rng, a_real_param):
+            match H_rnn.param_real:
+                case "softplus":
+                    magn_a = complex_lib.softplus(a_real_param)
+                case "exponential":
+                    log_a = (
+                        H_rnn.log_a_scale
+                        * complex_lib.softplus(a_real_param)
+                    )
+                    magn_a = complex_lib.exp(log_a)
+                case _:
+                    raise ValueError(f"Unknown parameterization for real part: {H_rnn.param_real}")
+            a_squared = jnp.square(magn_a)
+            norm_factor = sqrt_bound_derivative(
+                jnp.maximum(1 - a_squared, jnp.full_like(a_squared, 1e-6)),
+                200
+            )
+            return norm_factor
+
         a_real_param = self.param("a_real_param", stable_init_real, (d_inner,))
         match H_rnn.dtype_hidden:
             case "complex":
@@ -266,6 +285,8 @@ class RGLRU(nn.Module):
                 )
             case "none":
                 norm_factor = 1.0
+            case "learnable":
+                norm_factor = self.param("norm_factor", )
             case _:
                 raise ValueError(f"Unknown gate_a_imag: {H_rnn.gate_a_imag}")
         x = norm_factor * x
