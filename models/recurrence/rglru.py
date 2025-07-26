@@ -222,7 +222,7 @@ class RGLRU(nn.Module):
 
         match H_rnn.param_real:
             case "softplus":
-                magn_a = jnp.power(complex_lib.softplus(a_real_param), log_gate_a_real)
+                magn_a = jnp.power(complex_lib.softplus(a_real_param) + 1e-6, log_gate_a_real)
                 magn_a = magn_a * gate_a_real
             case "exponential":
                 log_a = (
