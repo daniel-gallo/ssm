@@ -286,7 +286,7 @@ class RGLRU(nn.Module):
             case "none":
                 norm_factor = 1.0
             case "learnable":
-                norm_factor = self.param("norm_factor", )
+                norm_factor = self.param("norm_factor", init_norm, a_real_param)
             case _:
                 raise ValueError(f"Unknown gate_a_imag: {H_rnn.gate_a_imag}")
         x = norm_factor * x
