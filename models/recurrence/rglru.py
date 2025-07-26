@@ -63,7 +63,7 @@ class RGLRU(nn.Module):
                 case "tanh":
                     theta = jnp.arctanh(scale * u)
                 case "exponential":
-                    theta = jnp.log(scale * u)
+                    theta = jnp.log(jnp.abs(scale * u))
                 case _:
                     raise ValueError(f"Unknown param_imag: {H_rnn.param_imag}")
             return theta
