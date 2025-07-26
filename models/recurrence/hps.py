@@ -30,7 +30,7 @@ class RNNHyperparams:
 
     # Parametrisation
     param_real: Literal["softplus", "exponential"] = "exponential"
-    param_imag: Literal["linear", "tanh"] = "linear"
+    param_imag: Literal["linear", "tanh", "exponential"] = "linear"
 
     # Gating mechanisms used (default = RGLRU)
     n_diag_blocks: int = 32

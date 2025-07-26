@@ -62,6 +62,8 @@ class RGLRU(nn.Module):
                     theta = scale * u
                 case "tanh":
                     theta = jnp.arctanh(scale * u)
+                case "exponential":
+                    theta = jnp.log(scale * u)
                 case _:
                     raise ValueError(f"Unknown param_imag: {H_rnn.param_imag}")
             return theta
@@ -219,6 +221,8 @@ class RGLRU(nn.Module):
                     log_a_imag = a_imag_param * gate_a_imag * jnp.pi
                 case "tanh":
                     log_a_imag = jnp.tanh(a_imag_param) * gate_a_imag * jnp.pi
+                case "exponential":
+                    log_a_imag = jnp.exp(a_imag_param) * gate_a_imag * jnp.pi
                 case _:
                     raise ValueError(f"Unknown parameterization for imaginary part: {H_rnn.param_imag}")
 
