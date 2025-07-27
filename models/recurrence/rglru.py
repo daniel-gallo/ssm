@@ -142,6 +142,7 @@ class RGLRU(nn.Module):
                     )(x)
                 )
                 log_gate_a_real = gate_a
+                param_gate_a_real = jnp.ones_like(gate_a)
                 gate_a_real = jnp.ones_like(gate_a)
             case "mlp":
                 gate_a = BlockDiagonalLinear(
@@ -150,7 +151,17 @@ class RGLRU(nn.Module):
                     d_output=d_inner,
                 )(x)
                 log_gate_a_real = jnp.ones_like(gate_a)
+                param_gate_a_real = jnp.ones_like(gate_a)
                 gate_a_real = gate_a
+            case "pre_mlp":
+                gate_a = BlockDiagonalLinear(
+                    n_blocks=H_rnn.n_diag_blocks,
+                    d_input=d_hidden,
+                    d_output=d_inner,
+                )(x)
+                log_gate_a_real = jnp.ones_like(gate_a)
+                param_gate_a_real = gate_a
+                gate_a_real = jnp.ones_like(gate_a)
             case "tanh":
                 gate_a = jnp.tanh(
                         BlockDiagonalLinear(
@@ -160,10 +171,12 @@ class RGLRU(nn.Module):
                     )(x)
                 )
                 log_gate_a_real = jnp.ones_like(gate_a)
+                param_gate_a_real = jnp.ones_like(gate_a)
                 gate_a_real = gate_a
             case "none":
                 gate_a = jnp.ones((batch_size, seq_len, d_inner))
                 log_gate_a_real = gate_a
+                param_gate_a_real = jnp.ones_like(gate_a)
                 gate_a_real = gate_a
             case _:
                 raise ValueError(f"Unknown gate_a_real: {H_rnn.gate_a_real}")
@@ -222,13 +235,13 @@ class RGLRU(nn.Module):
 
         match H_rnn.param_real:
             case "softplus":
-                magn_a = jnp.power(complex_lib.softplus(a_real_param) + 1e-6, log_gate_a_real)
+                magn_a = jnp.power(complex_lib.softplus(a_real_param * param_gate_a_real) + 1e-6, log_gate_a_real)
                 magn_a = magn_a * gate_a_real
             case "exponential":
                 log_a = (
                     H_rnn.log_a_scale
                     * log_gate_a_real
-                    * complex_lib.softplus(a_real_param)
+                    * complex_lib.softplus(a_real_param * param_gate_a_real)
                 )
                 magn_a = complex_lib.exp(log_a) * gate_a_real
             case _:
