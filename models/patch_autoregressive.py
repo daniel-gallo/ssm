@@ -202,12 +202,13 @@ class UpPool(nn.Module):
         assert dim % self.factor_feature == 0
 
         if self.H.conv_pooling:
+            d_target = dim // self.factor_feature
             x = nn.Conv(
-                dim // self.factor_feature,
+                d_target,
                 self.factor,
                 padding=[(self.factor - 1, self.factor - 1)],
                 input_dilation=self.factor,
-                feature_group_count=x.shape[-1],
+                feature_group_count=d_target,
                 kernel_init=get_init(self.H, self.last_layer_init_scale),
             )(x)
         else:
