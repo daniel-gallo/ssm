@@ -1,16 +1,14 @@
-from functools import partial
 import dataclasses
-from copy import deepcopy
+from functools import partial
 from math import prod
 from typing import Literal, Tuple
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import scanagram
 from einops import rearrange
 from jax import lax, random
-import scanagram
-from scanagram import test_util
 
 from data import PaddedArray
 from hps import Hyperparams
@@ -173,21 +171,14 @@ class DownPool(nn.Module):
     factor_feature: int = 1
 
     @nn.compact
-    def __call__(self, x):
-        if self.H.conv_pooling:
-            return nn.Conv(
-                x.shape[-1] * self.factor_feature,
-                self.factor,
-                self.factor,
-                padding=[(self.factor - 1, 0)],
-                feature_group_count=x.shape[-1],
-            )(x)
-        else:
-            # TODO: Fix causal connection here
-            raise NotImplementedError
-            # batch_size, seq_len, dim = x.shape
-            # x = rearrange(x, "...(l m) d -> ... l (m d)", m=self.factor)
-            # return nn.Dense(dim * self.factor_feature)(x)
+    def __call__(self, x, sampling=False):
+        return nn.Conv(
+            x.shape[-1] * self.factor_feature,
+            self.factor,
+            self.factor,
+            padding=[(0, 0)] if sampling else [(self.factor - 1, 0)],
+            feature_group_count=x.shape[-1],
+        )(x)
 
 
 class UpPool(nn.Module):
@@ -201,25 +192,15 @@ class UpPool(nn.Module):
         _, _, dim = x.shape
         assert dim % self.factor_feature == 0
 
-        if self.H.conv_pooling:
-            d_target = dim // self.factor_feature
-            x = nn.Conv(
-                d_target,
-                self.factor,
-                padding=[(self.factor - 1, self.factor - 1)],
-                input_dilation=self.factor,
-                feature_group_count=d_target,
-                kernel_init=get_init(self.H, self.last_layer_init_scale),
-            )(x)
-        else:
-            # TODO: Fix causal connection here
-            raise NotImplementedError
-            # batch_size, seq_len, dim = x.shape
-            # x = nn.Dense(
-            #     dim * self.factor // self.factor_feature,
-            #     kernel_init=get_init(self.H, self.last_layer_init_scale),
-            # )(x)
-            # x = rearrange(x, "... l (m d) -> ... (l m) d", m=self.factor)
+        d_target = dim // self.factor_feature
+        x = nn.Conv(
+            d_target,
+            self.factor,
+            padding=[(self.factor - 1, self.factor - 1)],
+            input_dilation=self.factor,
+            feature_group_count=d_target,
+            kernel_init=get_init(self.H, self.last_layer_init_scale),
+        )(x)
         return x
 
 
@@ -236,9 +217,7 @@ class ResBlock(nn.Module):
 
         x = get_normalization(self.H)(x)
 
-        x_branch = self.layer(
-            x, sampling=sampling
-        )
+        x_branch = self.layer(x, sampling=sampling)
         if self.H.use_gating:
             _, _, inner_d = x_branch.shape
             gating_branch = nn.Dense(inner_d)(x)
@@ -322,9 +301,9 @@ class AttentionBlock(nn.Module):
     @nn.compact
     def __call__(self, x, **kwargs):
         bs, seq_len, dim = x.shape
-        z = LocalAttentionBlock(
-            dim, self.H.mwa_heads, self.H.mwa_window_size
-        )(x)
+        z = LocalAttentionBlock(dim, self.H.mwa_heads, self.H.mwa_window_size)(
+            x
+        )
         if self.H.use_gating:
             gated_x = nn.Dense(dim)(x)
             z = z * nn.gelu(gated_x)
@@ -394,14 +373,71 @@ class SkipBlock(nn.Module):
 
         skip = x
 
-        x = self.down_pool(x)
-        x = self.inner_layer(
-            x,
-            training,
-            sampling,
-        )
-        x = self.up_pool(x)
+        @scanagram.custom_scanagram
+        def pooled_block(x):
+            x = self.down_pool(x)
+            x = self.inner_layer(x, training, sampling)
+            x = self.up_pool(x)
+            return x
 
+        @pooled_block.def_scanagram
+        def pooled_block_scanagram_rule(scan_info, x):
+            pass
+            # b, l, c = x.shape
+            # assert scan_info.axis == 1
+            # if scan_info.prefill is not None:
+            #     raise NotImplementedError
+            # down_pool_carry = jnp.zeros(
+            #     (b, self.pool_temporal - 1, c)
+            # )
+            # example_down_pooled_xs = jax.ShapeDtypeStruct(
+            #     (b, l // self.pool_temporal, c * self.pool_feature), "float32"
+            # )
+            # def inner_layer(x):
+            #     return jnp.moveaxis(
+            #         self.inner_layer(jnp.moveaxis(x, 0, 1), training, sampling),
+            #         1, 0
+            #     )
+            # inner_body, inner_carry = scanagram.as_scan(
+            #     inner_layer, example_down_pooled_xs
+            # )
+            # up_pool_carry = jnp.zeros(b, self.pool_temporal - 1, c)
+            # def body_fn(carry, x):
+            #     t, down_pool_carry, inner_carry, up_pool_carry = carry
+            #     x = jnp.expand_dims(x, 1)
+            #     down_pool_input = jnp.concatenate([down_pool_carry, x], 1)
+            #     down_pool_carry = down_pool_input[:, 1:]
+            #     def do_inner():
+            #         down_pool_output = self.down_pool(down_pool_input, True)
+            #         down_pool_output = jnp.squeeze(down_pool_output, 1)
+            #         inner_carry, inner_output = inner_body(
+            #             inner_carry, down_pool_output
+            #         )
+            #         up_pool_input = jnp.expand_dims(inner_output, 1)
+            #         up_pool_output = self.up_pool(up_pool_input)
+            #         output, up_pool_carry = jnp.split(
+            #             up_pool_output, [1], 1
+            #         )
+            #         return output, inner_carry, up_pool_carry
+
+            #     def dont_inner():
+            #         return lax.dynamic_index_in_dim(
+            #             up_pool_carry, (t % self.pool_temporal) - 1, 1
+            #         ), inner_carry, up_pool_carry
+
+            #     output, inner_carry, up_pool_carry = lax.cond(
+            #         t % self.pool_temporal, dont_inner, do_inner
+            #     )
+            #     output = jnp.squeeze(output, 1)
+            #     return (
+            #         (t + 1, down_pool_carry, inner_carry, up_pool_carry),
+            #         output
+            #     )
+            # return scanagram.ScanInfo(1, None), body_fn, (
+            #     0, down_pool_carry, inner_carry, up_pool_carry
+            # )
+
+        x = pooled_block(x)
         x = x + skip
 
         for block in self.up_blocks:
@@ -544,19 +580,18 @@ class PatchARModel(nn.Module):
 
         def full_scan(x):
             return jnp.moveaxis(
-                self.evaluate(jnp.moveaxis(x, 1, 0), sampling=True),
-                0, 1
+                self.evaluate(jnp.moveaxis(x, 1, 0), sampling=True), 0, 1
             )
 
         body_fn, carry_init = scanagram.as_scan(full_scan, example_result)
-        #test_util.check_scan(
+        # test_util.check_scan(
         #    full_scan,
         #    random.randint(
         #        random.PRNGKey(0),
         #        (gen_len, n_samples, self.H.data_num_channels),
         #        0, 255
         #    )
-        #)
+        # )
 
         def gen_step(x_and_carry, rng):
             x, carry = x_and_carry
@@ -566,8 +601,10 @@ class PatchARModel(nn.Module):
 
         _, result = lax.scan(
             gen_step,
-            (jnp.zeros((n_samples, self.H.data_num_channels), "int32"),
-             carry_init),
-            rng
+            (
+                jnp.zeros((n_samples, self.H.data_num_channels), "int32"),
+                carry_init,
+            ),
+            rng,
         )
         return rearrange(result, "l b c -> b l c")
