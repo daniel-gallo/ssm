@@ -15,14 +15,14 @@
 """Griffin and Hawk"s model components."""
 
 import functools
-from typing import Literal, NamedTuple, overload
+from typing import NamedTuple, overload
 
 import einops
 import jax
-from jax import lax
 import jax.numpy as jnp
 from flax import linen as nn
-from scanagram import custom_scanagram, ScanInfo
+from jax import lax
+from scanagram import ScanInfo, custom_scanagram
 
 from models.attention import array_typing as at
 
@@ -228,8 +228,7 @@ def _attention_cache_from_prompt(
     w = min(window_size, keys.shape[1])
     padding = [[0, 0], [0, window_size - w], [0, 0], [0, 0]]
     num_tokens = (
-        jnp.zeros(b, "int32")
-        if segment_pos is None else segment_pos[:, -1] + 1
+        jnp.zeros(b, "int32") if segment_pos is None else segment_pos[:, -1] + 1
     )
 
     # This ensures that the keys and values are right padded in the cache.
@@ -241,6 +240,7 @@ def _attention_cache_from_prompt(
         values=jnp.pad(right_padded_values, padding),
         num_tokens=num_tokens,
     )
+
 
 def _masked_self_attention(mask, qs, ks, vs, dtype):
     _, _, _, head_dim = qs.shape
@@ -255,6 +255,7 @@ def _masked_self_attention(mask, qs, ks, vs, dtype):
     probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
     encoded = einops.einsum(probs, vs, "b n t s, b s n h -> b t n h")
     return encoded
+
 
 class LocalAttentionBlock(nn.Module):
     """Local Multi-Head Attention (MHA) block.
@@ -397,8 +398,9 @@ class LocalAttentionBlock(nn.Module):
             cache_init = _attention_cache_from_prompt(
                 jnp.zeros((b, 0, 1, h), ks.dtype),
                 jnp.zeros((b, 0, 1, h), vs.dtype),
-                self.window_size
+                self.window_size,
             )
+
             def body_fn(carry, q_k_v):
                 i, cache = carry
                 q, k, v = q_k_v
@@ -419,9 +421,10 @@ class LocalAttentionBlock(nn.Module):
                 cache_new, encoded = lax.cond(
                     i % stride,
                     lambda: (cache, jnp.zeros_like(encoded)),
-                    lambda: (cache_new, encoded)
+                    lambda: (cache_new, encoded),
                 )
                 return (i + 1, cache_new), encoded
+
             return ScanInfo(1, stride), body_fn, (0, cache_init)
 
         encoded = masked_self_attention((queries, keys, values))

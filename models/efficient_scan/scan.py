@@ -94,8 +94,12 @@ def lru_linear_scan(
 
         return (h_t, a_t), (h_out, a_out)
 
-    #h0 = complex_lib.zeros_like(x[:, 0], acc_dtype) if h0 is None else h0
-    h0 = complex_lib.zeros_like(x,  acc_dtype, x.shape[:1] + x.shape[2:]) if h0 is None else h0
+    # h0 = complex_lib.zeros_like(x[:, 0], acc_dtype) if h0 is None else h0
+    h0 = (
+        complex_lib.zeros_like(x, acc_dtype, x.shape[:1] + x.shape[2:])
+        if h0 is None
+        else h0
+    )
     a0 = complex_lib.ones_like(h0) if return_a_prod else None
 
     scan_fn = jax.vmap(

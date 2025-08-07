@@ -14,6 +14,7 @@ from data import PaddedArray
 from hps import Hyperparams
 from models.attention.modules import LocalAttentionBlock
 from models.recurrence import RNNHyperparams, get_recurrent_block
+from models.scanagram_util import pooled_block_scanagram_rule
 
 
 def log_likelihood(H: Hyperparams, logits, x: PaddedArray):
@@ -381,62 +382,7 @@ class SkipBlock(nn.Module):
 
         if sampling and self.pool_temporal > 1:
             pooled_block = scanagram.custom_scanagram(pooled_block)
-
-            @pooled_block.def_scanagram
-            def pooled_block_scanagram_rule(scan_info, x):
-                b, l, c = x.shape
-                assert scan_info.axis == 1
-                if scan_info.prefill is not None:
-                    raise NotImplementedError
-                down_pool_carry = jnp.zeros(
-                    (b, self.pool_temporal - 1, c)
-                )
-                example_down_pooled_xs = jax.ShapeDtypeStruct(
-                    (l // self.pool_temporal, b, c * self.pool_feature), "float32"
-                )
-                def inner_layer(x):
-                    return jnp.moveaxis(
-                        self.inner_layer(jnp.moveaxis(x, 0, 1), training, sampling),
-                        1, 0
-                    )
-                inner_body, inner_carry = scanagram.as_scan(
-                    inner_layer, example_down_pooled_xs
-                )
-                up_pool_carry = jnp.zeros((b, self.pool_temporal - 1, c))
-                def body_fn(carry, x):
-                    t, down_pool_carry, inner_carry, up_pool_carry = carry
-                    x = jnp.expand_dims(x, 1)
-                    down_pool_input = jnp.concatenate([down_pool_carry, x], 1)
-                    down_pool_carry = down_pool_input[:, 1:]
-                    def do_inner():
-                        down_pool_output = self.down_pool(down_pool_input, True)
-                        down_pool_output = jnp.squeeze(down_pool_output, 1)
-                        inner_carry_, inner_output = inner_body(
-                            inner_carry, down_pool_output
-                        )
-                        up_pool_input = jnp.expand_dims(inner_output, 1)
-                        up_pool_output = self.up_pool(up_pool_input)
-                        output, up_pool_carry = jnp.split(
-                            up_pool_output, [1], 1
-                        )
-                        return output, inner_carry_, up_pool_carry
-
-                    def dont_inner():
-                        return lax.dynamic_index_in_dim(
-                            up_pool_carry, (t % self.pool_temporal) - 1, 1
-                        ), inner_carry, up_pool_carry
-
-                    output, inner_carry, up_pool_carry = lax.cond(
-                        t % self.pool_temporal, dont_inner, do_inner
-                    )
-                    output = jnp.squeeze(output, 1)
-                    return (
-                        (t + 1, down_pool_carry, inner_carry, up_pool_carry),
-                        output
-                    )
-                return scanagram.ScanInfo(1, None), body_fn, (
-                    0, down_pool_carry, inner_carry, up_pool_carry
-                )
+            pooled_block.def_scanagram(pooled_block_scanagram_rule(self))
 
         x = pooled_block(x)
         x = x + skip
