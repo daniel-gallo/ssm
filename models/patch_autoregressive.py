@@ -173,6 +173,9 @@ class DownPool(nn.Module):
 
     @nn.compact
     def __call__(self, x, sampling=False):
+        if not self.H.conv_pooling:
+            # No longer supporting reshape-based pooling
+            raise NotImplementedError
         return nn.Conv(
             x.shape[-1] * self.factor_feature,
             self.factor,
