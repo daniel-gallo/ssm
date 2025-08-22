@@ -23,7 +23,7 @@ class RGLRU(nn.Module):
     feature_scale: int = 1  # rename
 
     @nn.compact
-    def __call__(self, x, h_prev=None, pos_emb=None, sampling=False):
+    def __call__(self, x, pos_emb=None, sampling=False):
         H_rnn = self.H.rnn
         # TODO: implement BlockDiagonalLinear from RecurrentGemma
         batch_size, seq_len, d_in = x.shape
@@ -86,10 +86,6 @@ class RGLRU(nn.Module):
             a_squared = complex_lib.abs_squared(a)
 
         x = merged_to_complex(H_rnn, x)
-        h_prev = (
-            merged_to_complex(H_rnn, h_prev) if h_prev is not None else None
-        )
-
         x = gate_x * x
         # TODO: placement of norm corresponding to RGLRU
         # reconsider doing it before gating
@@ -105,10 +101,9 @@ class RGLRU(nn.Module):
                 sequence_axis_name="seq",
             )
         )
-        h, h_last = scan.linear_scan(
+        h, _ = scan.linear_scan(
             x=x,
             a=a,
-            h0=h_prev,
             reverse=self.reverse,
             scan_type=(
                 ScanType.LINEAR_NATIVE
@@ -119,14 +114,4 @@ class RGLRU(nn.Module):
             unroll=128,
         )
         h = complex_to_merged(H_rnn, h)
-        h_last = complex_to_merged(H_rnn, h_last)
-        return nn.Dense(d_in)(h), h_last
-
-    def default_state(self, batch_size):
-        H_rnn = self.H.rnn
-        d_hidden = (
-            H_rnn.d_hidden * self.feature_scale
-            if H_rnn.adaptive_d
-            else H_rnn.d_hidden
-        )
-        return jnp.zeros((batch_size, d_hidden))
+        return nn.Dense(d_in)(h)
